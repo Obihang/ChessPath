@@ -25,6 +25,8 @@ import {
   Play,
 } from 'lucide-react';
 import { engineService, EngineStatusInfo, EngineTestResult } from '../../services/engineService';
+import { PIECE_SETS, preloadPieceSet } from '../../config/pieceSets';
+import { PieceIcon } from '../board/PieceIcon';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -340,6 +342,82 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 type="checkbox"
                 checked={localSettings.showCoordinates}
                 onChange={(e) => handleChange('showCoordinates', e.target.checked)}
+                className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+              />
+            </div>
+          </section>
+
+          {/* Piece Sets & Styling */}
+          <section className="space-y-3 border-t border-slate-800/80 pt-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+                <Palette className="w-4 h-4" />
+                <span>Chess Piece Sets & Contrast</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Choose professional vector piece sets. Each set is preloaded to avoid flicker and runs fully offline.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {PIECE_SETS.map((set) => {
+                const isSelected = (localSettings.pieceSet || 'cburnett') === set.id;
+                return (
+                  <button
+                    key={set.id}
+                    onClick={() => {
+                      handleChange('pieceSet', set.id);
+                      preloadPieceSet(set.id);
+                    }}
+                    className={`p-3 rounded-xl border text-left flex flex-col gap-2 transition-all ${
+                      isSelected
+                        ? 'border-amber-500 bg-amber-500/10 shadow-xs'
+                        : 'border-slate-800 bg-slate-950/40 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-xs text-slate-200">{set.name}</div>
+                        <div className="text-[10px] text-slate-400">By {set.author}</div>
+                      </div>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        {set.license}
+                      </span>
+                    </div>
+
+                    {/* Live Preview of 12 Pieces */}
+                    <div className="grid grid-cols-6 gap-1 p-1.5 bg-slate-900/80 rounded-lg border border-slate-800">
+                      {(['k', 'q', 'r', 'b', 'n', 'p'] as const).map((t) => (
+                        <div key={`w-${t}`} className="w-6 h-6 flex items-center justify-center">
+                          <PieceIcon type={t} color="w" pieceSet={set.id} pieceShadow={localSettings.pieceShadow} />
+                        </div>
+                      ))}
+                      {(['k', 'q', 'r', 'b', 'n', 'p'] as const).map((t) => (
+                        <div key={`b-${t}`} className="w-6 h-6 flex items-center justify-center">
+                          <PieceIcon type={t} color="b" pieceSet={set.id} pieceShadow={localSettings.pieceShadow} />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="text-[10px] text-slate-500 leading-tight">{set.description}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between pt-1 border-t border-slate-800/80">
+              <div>
+                <label htmlFor="shadow-toggle" className="text-xs font-medium text-slate-200 cursor-pointer">
+                  Subtle Piece Drop-Shadow
+                </label>
+                <div className="text-[10px] text-slate-400">Enhances contrast and depth on wooden board squares</div>
+              </div>
+              <input
+                id="shadow-toggle"
+                type="checkbox"
+                checked={localSettings.pieceShadow ?? true}
+                onChange={(e) => handleChange('pieceShadow', e.target.checked)}
                 className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
               />
             </div>

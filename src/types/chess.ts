@@ -77,6 +77,8 @@ export interface AppSettings {
   voiceVolume: number;
   selectedVoiceURI: string;
   useNaturalVoice: boolean;
+  pieceSet: string;
+  pieceShadow: boolean;
 }
 
 export type ActiveTab = 'learn' | 'practice' | 'play' | 'openings' | 'progress';

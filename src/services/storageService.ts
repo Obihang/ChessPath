@@ -31,6 +31,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceVolume: 1.0,
   selectedVoiceURI: '',
   useNaturalVoice: false,
+  pieceSet: 'cburnett',
+  pieceShadow: true,
 };
 
 export const storageService = {
