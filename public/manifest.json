@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "ChessPath",
+  "short_name": "ChessPath",
+  "description": "Free, offline-ready chess academy with Stockfish engine, interactive lessons, gambit trainer, and AI voice coach.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#090d16",
+  "background_color": "#090d16",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

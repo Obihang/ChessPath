@@ -1,0 +1,6 @@
+{
+  "name": "ChessPath",
+  "description": "Free, offline-ready chess academy with Stockfish engine, interactive lessons, gambit trainer, and AI voice coach.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
