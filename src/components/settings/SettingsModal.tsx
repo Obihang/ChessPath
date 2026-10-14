@@ -23,6 +23,7 @@ import {
   Activity,
   Cpu,
   Play,
+  Bot,
 } from 'lucide-react';
 import { engineService, EngineStatusInfo, EngineTestResult } from '../../services/engineService';
 import { PIECE_SETS, preloadPieceSet } from '../../config/pieceSets';
@@ -593,6 +594,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </>
                     )}
                   </button>
+                  
+                  {localSettings.geminiApiKey && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const reply = await geminiService.chat(
+                            [{ role: 'user', parts: [{ text: 'Say hello in one sentence.' }] }],
+                            'You are a helpful assistant.'
+                          );
+                          alert(`Coach says: ${reply}`);
+                        } catch (e: any) {
+                          alert(`Chat error: ${e.message}`);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-medium transition-colors"
+                    >
+                      <Bot className="w-3.5 h-3.5" />
+                      <span>Test Coach Chat</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Status or Troubleshooting Toast */}

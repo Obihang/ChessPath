@@ -117,17 +117,18 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: textToSend,
-          systemInstruction: `You are a chess coach. Your conversation mode is: ${conversationMode}. Current FEN: ${currentFen}. Move History: ${moveHistory.join(' ')}`,
-        }),
-      });
+      // Build conversation history (last 12)
+      const history = messages
+        .slice(-12)
+        .map((m) => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] }));
+      
+      // Append current
+      history.push({ role: 'user', parts: [{ text: textToSend.trim() }] });
 
-      if (!response.ok) throw new Error('Failed to reach coaching service');
-      const { text: replyText } = await response.json();
+      const replyText = await geminiService.chat(
+        history as any,
+        `You are a chess coach. Your conversation mode is: ${conversationMode}. Current FEN: ${currentFen}. Move History: ${moveHistory.join(' ')}`
+      );
 
       const coachMsg: ChatMessage = {
         id: `coach-${Date.now()}`,
@@ -141,14 +142,21 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
       if (settings.voiceEnabled) {
         speakText(coachMsg.id, replyText);
       }
-    } catch {
+    } catch (e: any) {
+      let errorMessage = 'An unexpected error occurred.';
+      if (e.message === 'NO_KEY') errorMessage = 'Please add your Gemini API key in Settings.';
+      else if (e.message.includes('401') || e.message.includes('403')) errorMessage = 'Invalid Gemini API key.';
+      else if (e.message.includes('429')) errorMessage = 'Gemini rate limit exceeded. Please wait a minute.';
+      else if (e.message.includes('Failed to fetch')) errorMessage = 'Offline or network error.';
+
       const errorMsg: ChatMessage = {
         id: `err-${Date.now()}`,
         sender: 'coach',
-        text: "I couldn't reach the coaching service. Please check your network or Gemini API key in Settings.",
+        text: errorMessage,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMsg]);
+      speechService.logDiagnostic('error', `Chat error: ${e.message}`);
     } finally {
       setIsLoading(false);
     }

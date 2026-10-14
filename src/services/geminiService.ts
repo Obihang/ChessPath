@@ -132,6 +132,31 @@ Keep the tone encouraging, constructive, and inspiring!`;
     }
   },
 
+  async chat(
+    messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
+    systemInstruction: string,
+    model: string = 'gemini-3.8-flash'
+  ): Promise<string> {
+    const ai = getGeminiClient();
+    if (!ai) {
+      throw new Error('NO_KEY');
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: messages,
+        config: { systemInstruction },
+      });
+      return response.text || 'No response from AI.';
+    } catch (e: any) {
+      if (model === 'gemini-3.8-flash' && (e.message.includes('404') || e.message.includes('model not found'))) {
+        return this.chat(messages, systemInstruction, 'gemini-flash-latest');
+      }
+      throw e;
+    }
+  },
+
   async generateNaturalVoice(
     text: string,
     customKey?: string

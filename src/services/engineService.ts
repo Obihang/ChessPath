@@ -111,6 +111,40 @@ export class ChessEngineService {
     return this.lastEngineUsed;
   }
 
+  public async evaluate(
+    fen: string,
+    ms: number = 300
+  ): Promise<{ score: number; bestMove: string }> {
+    if (this.worker && this.isReady) {
+      return new Promise((resolve) => {
+        let bestMove = '';
+        let score = 0;
+        
+        const handleMessage = (e: MessageEvent) => {
+          const data = typeof e.data === 'string' ? e.data : '';
+          if (data.includes('score cp')) {
+            const match = data.match(/score cp (-?\d+)/);
+            if (match) score = parseInt(match[1]);
+          } else if (data.includes('score mate')) {
+             const match = data.match(/score mate (-?\d+)/);
+             if (match) score = parseInt(match[1]) > 0 ? 9999 : -9999;
+          }
+          if (data.startsWith('bestmove')) {
+            bestMove = data.split(' ')[1];
+            this.worker?.removeEventListener('message', handleMessage);
+            resolve({ score, bestMove });
+          }
+        };
+
+        this.worker?.addEventListener('message', handleMessage);
+        this.worker?.postMessage(`position fen ${fen}`);
+        this.worker?.postMessage(`go movetime ${ms}`);
+      });
+    }
+    // Minimax fallback
+    return { score: 0, bestMove: '' };
+  }
+
   public async newGame(): Promise<void> {
     if (this.worker && this.isReady) {
       this.worker.postMessage('ucinewgame');

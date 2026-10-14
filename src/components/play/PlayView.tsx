@@ -495,6 +495,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           disabled={isBoardDisabled}
           lastMove={lastMove}
           onMove={handleUserMove}
+          settings={settings}
         />
         <LiveChatIndicator onClick={onOpenCoach} />
       </div>

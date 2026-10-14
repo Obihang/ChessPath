@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Chess, Move, Square as ChessSquare } from 'chess.js';
-import { BoardThemeId, PieceColor, PieceType } from '../../types/chess';
+import { BoardThemeId, PieceColor, PieceType, AppSettings } from '../../types/chess';
 import { PieceIcon } from './PieceIcon';
 import { soundService } from '../../services/audioService';
+import { LiveCommentaryCard } from './LiveCommentaryCard';
+import { geminiService } from '../../services/geminiService';
+import { engineService } from '../../services/engineService';
 
 export interface ChessBoardProps {
   game: Chess;
@@ -12,6 +15,7 @@ export interface ChessBoardProps {
   disabled?: boolean;
   lastMove?: { from: string; to: string } | null;
   onMove?: (move: { from: string; to: string; promotion?: string; san?: string }) => void;
+  settings: AppSettings;
 }
 
 const BOARD_THEMES: Record<
@@ -58,10 +62,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   disabled = false,
   lastMove = null,
   onMove,
+  settings,
 }) => {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<Move[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<{ from: string; to: string } | null>(null);
+  const [commentary, setCommentary] = useState<string | null>(null);
+  const [isCommentaryMuted, setIsCommentaryMuted] = useState(false);
+  const lastFenRef = useRef(game.fen());
 
   // Drag state
   const [draggingSquare, setDraggingSquare] = useState<string | null>(null);
@@ -79,7 +87,30 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
     setPendingPromotion(null);
   }, [game.fen(), disabled]);
 
-  // Find king in check
+  // Commentary Logic
+  useEffect(() => {
+    const handleMove = async () => {
+      const fen = game.fen();
+      if (fen === lastFenRef.current) return;
+      lastFenRef.current = fen;
+
+      if (!settings.pieceSet) return; // Commentary enabled if pieceSet is chosen (hack for toggle)
+
+      const { score, bestMove } = await engineService.evaluate(fen);
+      
+      try {
+        const comment = await geminiService.chat(
+            [{role: 'user', parts: [{text: `FEN: ${fen}, Eval: ${score}`}]}],
+            'Act as a chess coach commentary mode.'
+        );
+        setCommentary(comment);
+      } catch (e) {
+        setCommentary(`Engine best move: ${bestMove}. Eval: ${score}`);
+      }
+    };
+    handleMove();
+  }, [game.fen(), settings.pieceSet]);
+
   const inCheck = game.inCheck();
   let checkSquare: string | null = null;
   if (inCheck) {
@@ -102,19 +133,15 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
 
       const piece = game.get(sq as ChessSquare);
 
-      // If a square is already selected
       if (selectedSquare) {
-        // Did we tap the same square? Deselect
         if (selectedSquare === sq) {
           setSelectedSquare(null);
           setLegalMoves([]);
           return;
         }
 
-        // Is it one of the legal destination squares?
         const matchingMove = legalMoves.find((m) => m.to === sq);
         if (matchingMove) {
-          // Check for pawn promotion
           const movingPiece = game.get(selectedSquare as ChessSquare);
           const isPromotion =
             movingPiece &&
@@ -126,12 +153,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
             return;
           }
 
-          // Execute move
           executeMove(selectedSquare, sq);
           return;
         }
 
-        // If we tapped another piece of the current player's color, switch selection
         if (piece && piece.color === game.turn()) {
           setSelectedSquare(sq);
           const moves = game.moves({ square: sq as ChessSquare, verbose: true });
@@ -139,13 +164,11 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
           return;
         }
 
-        // Tapped invalid square: deselect
         setSelectedSquare(null);
         setLegalMoves([]);
         return;
       }
 
-      // No square selected yet: select if it's our turn's piece
       if (piece && piece.color === game.turn()) {
         setSelectedSquare(sq);
         const moves = game.moves({ square: sq as ChessSquare, verbose: true });
@@ -184,7 +207,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
     executeMove(pendingPromotion.from, pendingPromotion.to, pieceType);
   };
 
-  // Drag & drop handlers
   const handleDragStart = (e: React.DragEvent, sq: string) => {
     if (disabled) return;
     const piece = game.get(sq as ChessSquare);
@@ -231,6 +253,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
 
   return (
     <div className="relative w-full max-w-[520px] aspect-square mx-auto select-none touch-manipulation">
+      <LiveCommentaryCard comment={commentary} isMuted={isCommentaryMuted} onToggleMute={() => setIsCommentaryMuted(!isCommentaryMuted)} />
       {/* Outer wooden border / bezel */}
       <div className="w-full h-full p-2.5 sm:p-3.5 bg-slate-900 border-2 border-slate-800 rounded-2xl shadow-2xl flex flex-col justify-center">
         {/* The 8x8 Grid */}
@@ -252,7 +275,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
               const legalMove = legalMoves.find((m) => m.to === squareName);
               const isCapture = !!(legalMove && (piece || legalMove.flags.includes('e')));
 
-              // Square background styling
               let squareBg = isDark ? colors.dark : colors.light;
 
               return (
@@ -305,10 +327,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                   {legalMove && (
                     <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
                       {isCapture ? (
-                        // Capture indicator: concentric target ring
                         <div className="w-[82%] h-[82%] rounded-full border-4 sm:border-[5px] border-black/25 dark:border-white/35 animate-in fade-in duration-150" />
                       ) : (
-                        // Empty square indicator: subtle dot
                         <div className="w-3 sm:w-4 h-3 sm:h-4 rounded-full bg-black/20 dark:bg-white/30 shadow-xs" />
                       )}
                     </div>
@@ -317,7 +337,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                   {/* Coordinate Labels */}
                   {showCoordinates && (
                     <>
-                      {/* Rank label on leftmost column */}
                       {fIdx === 0 && (
                         <span
                           className={`absolute top-0.5 left-1 text-[10px] sm:text-xs font-semibold leading-none pointer-events-none ${
@@ -327,7 +346,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                           {rank}
                         </span>
                       )}
-                      {/* File label on bottom row */}
                       {rIdx === 7 && (
                         <span
                           className={`absolute bottom-0.5 right-1 text-[10px] sm:text-xs font-semibold leading-none pointer-events-none ${

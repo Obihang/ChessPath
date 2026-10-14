@@ -217,6 +217,7 @@ export const OpeningTrainer: React.FC<OpeningTrainerProps> = ({
           disabled={activeTab === 'explore' || !isUserTurnInTrain}
           lastMove={activeTab === 'explore' ? explorerLastMove : trainLastMove}
           onMove={handleTrainMove}
+          settings={settings}
         />
       </div>
 
