@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ActiveTab, AppSettings } from './types/chess';
 import { UserProgress } from './types/curriculum';
 import { storageService } from './services/storageService';
@@ -12,8 +12,14 @@ import { PracticeView } from './components/practice/PracticeView';
 import { ProgressView } from './components/progress/ProgressView';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { AICoachDrawer } from './components/coach/AICoachDrawer';
+import { validateAllContent } from './utils/validateContent';
 
 export default function App() {
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      validateAllContent();
+    }
+  }, []);
   const [settings, setSettings] = useState<AppSettings>(() => storageService.getSettings());
   const [progress, setProgress] = useState<UserProgress>(() => storageService.getProgress());
   const [activeTab, setActiveTab] = useState<ActiveTab>('play');
@@ -23,6 +29,11 @@ export default function App() {
   // Active game context for AI coach
   const [currentFen, setCurrentFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
+
+  const handlePositionChange = useCallback((fen: string, history: string[]) => {
+    setCurrentFen((prev) => (prev === fen ? prev : fen));
+    setMoveHistory(history);
+  }, []);
 
   useEffect(() => {
     soundService.setEnabled(settings.soundEnabled);
@@ -140,10 +151,8 @@ export default function App() {
           <PlayView
             settings={settings}
             onOpenSettings={() => setIsSettingsOpen(true)}
-            onPositionChange={(fen, history) => {
-              setCurrentFen(fen);
-              setMoveHistory(history);
-            }}
+            onOpenCoach={() => setIsCoachOpen(true)}
+            onPositionChange={handlePositionChange}
           />
         )}
 

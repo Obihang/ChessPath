@@ -1,6 +1,0 @@
-{
-  "summary": "Updated implementation plan for ChessPath adding Stage 7: Android APK & Desktop Packaging. Includes dual-target build system (VITE_TARGET=pages vs android), Capacitor Android integration with bundled offline Stockfish WASM, GitHub Actions CI workflow for building debug APKs without committing secrets, native speech recognition with browser fallback, Android polish (status bar theme, splash, hardware back button, screen wake lock), and comprehensive README instructions.",
-  "updatedAt": "2026-10-13T13:02:39.377552023Z",
-  "requestFeedback": true,
-  "userFacing": true
-}

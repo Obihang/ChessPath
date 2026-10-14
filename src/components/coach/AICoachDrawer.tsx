@@ -59,6 +59,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   const [isListening, setIsListening] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [conversationMode, setConversationMode] = useState<'learning' | 'criticizing' | 'simple' | 'competitive'>('learning');
 
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -116,7 +117,17 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     setIsLoading(true);
 
     try {
-      const replyText = await geminiService.explainPosition(currentFen, moveHistory);
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: textToSend,
+          systemInstruction: `You are a chess coach. Your conversation mode is: ${conversationMode}. Current FEN: ${currentFen}. Move History: ${moveHistory.join(' ')}`,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to reach coaching service');
+      const { text: replyText } = await response.json();
 
       const coachMsg: ChatMessage = {
         id: `coach-${Date.now()}`,
@@ -215,6 +226,17 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
           </div>
 
           <div className="flex items-center gap-1">
+            <select
+              value={conversationMode}
+              onChange={(e) => setConversationMode(e.target.value as any)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[10px] rounded-lg px-2 py-1.5 focus:outline-hidden focus:border-amber-500"
+            >
+              <option value="learning">Full Learning</option>
+              <option value="criticizing">Full Criticizing</option>
+              <option value="simple">Simple Conversation</option>
+              <option value="competitive">Competitive</option>
+            </select>
+
             {/* Always-visible Voice Coach Mute button */}
             <button
               type="button"

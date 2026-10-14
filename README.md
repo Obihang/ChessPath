@@ -51,8 +51,8 @@
 
 ### Installation
 ```bash
-git clone https://github.com/your-username/chesspath.git
-cd chesspath
+git clone https://github.com/Obihang/ChessPath.git
+cd ChessPath
 npm install
 ```
 
@@ -69,7 +69,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 1. Get a free API key from [Google AI Studio](https://aistudio.google.com/).
 2. Open ChessPath, click the **Settings** (gear) icon in the top right.
 3. Paste your key in the **Gemini AI Tutor Key** field.
-4. Your key is saved strictly in your device's `localStorage` and is never sent to any external server or committed to Git.
+4. Your key is stored only in the browser's `localStorage` and sent only to Google's Gemini API when AI features are used, never to any other server and never committed to Git.
 5. *Note: If no key is set, all non-AI features (rules, lessons, puzzles, offline Stockfish, openings) work 100% free and offline.*
 
 ---
@@ -92,45 +92,12 @@ ChessPath is a 100% static client-side single-page app (SPA) that deploys direct
    ```
 3. Set your repository name base path in `vite.config.ts` or deploy with:
    ```bash
-   VITE_BASE_PATH="/chesspath/" npm run deploy
+   VITE_BASE_PATH="/ChessPath/" npm run deploy
    ```
 4. In your GitHub repo settings $\rightarrow$ **Pages**, set Source to `gh-pages` branch.
 
 ### Option B: Automatic GitHub Actions
-Create `.github/workflows/deploy.yml`:
-```yaml
-name: Deploy to GitHub Pages
-
-on:
-  push:
-    branches: [ main ]
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm install
-      - run: npm run build
-        env:
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./dist
-      - id: deployment
-        uses: actions/deploy-pages@v4
-```
+Pushing to the `main` branch automatically triggers `.github/workflows/deploy.yml`, which builds the app with base path `/ChessPath/` and deploys it to GitHub Pages.
 
 ---
 
@@ -186,8 +153,9 @@ The output APK is generated at:
 
 ---
 
-## 📜 Attribution & Licenses
+## 📜 License & Attribution
 
+- **License**: This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the [LICENSE](./LICENSE) file for details.
 - **Vector Chess Pieces**: Designed by **Colin M. L. Burnett (Cburnett)**, hosted on Wikimedia Commons and licensed under **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**.
 - **Stockfish Engine**: Copyright (c) T. Romstad, M. Costalba, J. Kiiski, G. Linscott and Stockfish contributors. Licensed under the **GNU General Public License v3.0 (GPLv3)**.
 - **chess.js**: Copyright (c) Jeff Hlywa. Licensed under the **BSD-2-Clause License**.

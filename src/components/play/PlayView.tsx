@@ -11,6 +11,7 @@ import {
   UserColorChoice,
 } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
+import { LiveChatIndicator } from '../coach/LiveChatIndicator';
 import { GameClock } from './GameClock';
 import { CapturedPieces } from '../board/CapturedPieces';
 import { MoveHistory } from '../board/MoveHistory';
@@ -34,6 +35,7 @@ import {
 interface PlayViewProps {
   settings: AppSettings;
   onOpenSettings: () => void;
+  onOpenCoach: () => void;
   onPositionChange?: (fen: string, history: string[]) => void;
 }
 
@@ -47,6 +49,7 @@ const TIME_CONTROLS: TimeControl[] = [
 export const PlayView: React.FC<PlayViewProps> = ({
   settings,
   onOpenSettings,
+  onOpenCoach,
   onPositionChange,
 }) => {
   // Game Configuration
@@ -75,9 +78,17 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [showSetup, setShowSetup] = useState<boolean>(false);
 
   // Sync active position with global AI Coach
+  const lastFenRef = useRef<string>('');
   useEffect(() => {
     if (onPositionChange) {
-      onPositionChange(game.fen(), moves.map((m) => m.san));
+      const currentFen = game.fen();
+      const historyArr = moves.map((m) => m.san);
+      const historyKey = historyArr.join(',');
+      const combined = `${currentFen}|${historyKey}`;
+      if (lastFenRef.current !== combined) {
+        lastFenRef.current = combined;
+        onPositionChange(currentFen, historyArr);
+      }
     }
   }, [game, moves, onPositionChange]);
 
@@ -462,7 +473,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
       />
 
       {/* Interactive ChessBoard */}
-      <div className="w-full">
+      <div className="w-full relative">
         <ChessBoard
           game={game}
           orientation={boardOrientation}
@@ -472,6 +483,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           lastMove={lastMove}
           onMove={handleUserMove}
         />
+        <LiveChatIndicator onClick={onOpenCoach} />
       </div>
 
       {/* Status Bar */}
