@@ -65,7 +65,19 @@ export interface OpeningItem {
 export interface PuzzleItem {
   id: string;
   title: string;
-  theme: 'fork' | 'pin' | 'skewer' | 'discovered' | 'mate-1' | 'mate-2' | 'mate-3' | 'back-rank' | 'smothered' | 'endgame';
+  theme:
+    | 'fork'
+    | 'pin'
+    | 'skewer'
+    | 'discovered'
+    | 'mate-1'
+    | 'mate-2'
+    | 'mate-3'
+    | 'back-rank'
+    | 'smothered'
+    | 'endgame'
+    | 'deflection'
+    | 'clearance';
   difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
   rating: number;
   fen: string;

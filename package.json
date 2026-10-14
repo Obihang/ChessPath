@@ -22,7 +22,7 @@
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "stockfish": "^16.0.0",
+    "stockfish": "^19.0.1",
     "tsx": "^4.19.2",
     "vite": "^5.4.11",
     "vite-plugin-pwa": "^0.21.1"

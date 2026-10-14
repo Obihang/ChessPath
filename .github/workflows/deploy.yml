@@ -32,6 +32,9 @@ jobs:
       - name: Validate content
         run: npm run validate
 
+      - name: Run linter and type check
+        run: npm run lint
+
       - name: Build static web app
         run: npm run build
         env:

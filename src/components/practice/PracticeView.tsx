@@ -40,6 +40,8 @@ export const PracticeView: React.FC<PracticeViewProps> = ({
     { id: 'pin', label: 'Pins' },
     { id: 'skewer', label: 'Skewers' },
     { id: 'discovered', label: 'Discovered' },
+    { id: 'deflection', label: 'Deflection' },
+    { id: 'clearance', label: 'Clearance' },
     { id: 'mate-1', label: 'Mate in 1' },
     { id: 'mate-2', label: 'Mate in 2' },
     { id: 'smothered', label: 'Smothered' },

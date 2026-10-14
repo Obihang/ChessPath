@@ -15,7 +15,19 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'icon.svg', 'pwa-192x192.png', 'pwa-512x512.png', 'engine/stockfish.js', 'engine/stockfish.wasm'],
+        includeAssets: [
+          'favicon.ico',
+          'icon.svg',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+          'engine/stockfish-19-lite-single.js',
+          'engine/stockfish-19-lite-single.wasm',
+          'engine/stockfish.js',
+          'engine/stockfish.wasm',
+          'fonts/plus-jakarta-sans-latin.woff2',
+          'fonts/jetbrains-mono-latin.woff2'
+        ],
         manifest: {
           name: 'ChessPath — Free Offline Chess Academy & AI Coach',
           short_name: 'ChessPath',
@@ -30,19 +42,25 @@ export default defineConfig(() => {
               src: './pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
-              purpose: 'any maskable'
+              purpose: 'any'
             },
             {
               src: './pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
-              purpose: 'any maskable'
+              purpose: 'any'
+            },
+            {
+              src: './pwa-maskable-512x512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable'
             }
           ]
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm}']
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,woff2}']
         }
       })
     ],

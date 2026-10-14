@@ -28,6 +28,9 @@ jobs:
       - name: Validate content
         run: npm run validate
 
+      - name: Run linter and type check
+        run: npm run lint
+
       - name: Build web application for Android
         run: npm run build
         env:
@@ -42,9 +45,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Capacitor CLI & sync android
+      - name: Add and sync Capacitor Android
         run: |
-          npx cap add android || true
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
           npx cap sync android
 
       - name: Build Debug APK with Gradle

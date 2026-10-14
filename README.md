@@ -5,7 +5,7 @@
 - **No accounts or sign-ups**
 - **No ads, trackers, or paywalls**
 - **100% offline & client-side** (runs in your browser and on your phone)
-- **Local Stockfish engine** with calibrated beginner-to-master difficulty
+- **Local Stockfish 19 Lite WASM engine** (single-threaded with embedded NNUE network) and background Web Worker Minimax fallback
 
 ---
 
@@ -14,7 +14,7 @@
 ### 1. Structured Curriculum (Learn)
 - **Level 1 (Absolute Basics)**: The board, coordinates, piece movement & captures, check vs checkmate, stalemate, castling, en passant, pawn promotion, piece values, and algebraic notation.
 - **Level 2 (Fundamentals)**: Golden opening principles, center control, knight/bishop development, king safety, ladder mate, queen & king checkmate, rook & king checkmate, and passed pawn square rule.
-- **Level 3 (Tactics)**: Knight forks, absolute & relative pins, skewers, discovered attacks, double check, smothered mate, Arabian mate, and mating patterns.
+- **Level 3 (Tactics)**: Knight forks, absolute & relative pins, skewers, discovered attacks, double check, smothered mate, Arabian mate, deflections, clearance sacrifices, and mating patterns.
 - **Levels 4–6**: Strategy, master endgames, and advanced calculation frameworks.
 - Interactive demonstration board for every lesson with instant feedback, progressive hints, and level mastery quizzes.
 
@@ -25,7 +25,7 @@
 - **Spaced Repetition (SRS) Trainer**: Train openings from memory; weak lines are automatically scheduled for review.
 
 ### 3. Play Modes
-- **Vs Computer (Offline AI)**: Calibrated difficulty from Beginner (800 Elo with shallow search depth and deliberate blunders) up to Master (2000+ Elo). Untimed or timed (Blitz 3+2, Blitz 5+3, Rapid 10+0).
+- **Vs Computer (Offline Engine)**: Real Stockfish 19 Lite WASM running client-side with calibrated UCI Elo and skill levels: Beginner (Level 0, 1320 Elo with shallow search & deliberate blunder rate), Casual (Level 2, 1450 Elo), Intermediate (Level 6, 1750 Elo), Advanced (Level 12, 2100 Elo), up to Master (Level 20, 2500+ Elo). Untimed or timed (Blitz 3+2, Blitz 5+3, Rapid 10+0). Supported by a non-blocking background Minimax Web Worker fallback.
 - **Pass & Play**: Two players on one device with dual clocks, increments, auto-flip option, move history, takebacks, and PGN export.
 
 ### 4. Practice & Tactics

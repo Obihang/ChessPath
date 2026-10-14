@@ -21,7 +21,10 @@ import {
   Loader2,
   Sparkles,
   Activity,
+  Cpu,
+  Play,
 } from 'lucide-react';
+import { engineService, EngineStatusInfo, EngineTestResult } from '../../services/engineService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -46,11 +49,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [voiceTestStatus, setVoiceTestStatus] = useState<{ type: 'info' | 'success' | 'error'; message: string } | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [engineStatus, setEngineStatus] = useState<EngineStatusInfo>(() => engineService.getStatus());
+  const [isTestingEngine, setIsTestingEngine] = useState(false);
+  const [engineTestResult, setEngineTestResult] = useState<EngineTestResult | null>(null);
 
   useEffect(() => {
     setLocalSettings(settings);
     if (speechService.isAvailable()) {
       setVoices(speechService.getVoices());
+    }
+    if (isOpen) {
+      const refreshStatus = () => setEngineStatus(engineService.getStatus());
+      refreshStatus();
+      const interval = setInterval(refreshStatus, 1000);
+      return () => clearInterval(interval);
     }
   }, [settings, isOpen]);
 
@@ -127,6 +139,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     storageService.saveSettings(updated);
     onUpdateSettings(updated);
     setVoiceTestStatus(null);
+  };
+
+  const handleTestEngine = async () => {
+    setIsTestingEngine(true);
+    setEngineTestResult(null);
+    try {
+      const res = await engineService.testEngine();
+      setEngineTestResult(res);
+      setEngineStatus(engineService.getStatus());
+    } finally {
+      setIsTestingEngine(false);
+    }
   };
 
   const handleTestGeminiVoice = async () => {
@@ -550,6 +574,84 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
             )}
+          </section>
+
+          {/* Chess Engine Diagnostics */}
+          <section className="space-y-3 border-t border-slate-800/80 pt-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+                <Cpu className="w-4 h-4" />
+                <span>Chess Engine Diagnostics</span>
+              </div>
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full font-medium border ${
+                  engineStatus.isStockfishReady
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                    : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                }`}
+              >
+                {engineStatus.statusLabel}
+              </span>
+            </div>
+
+            <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Engine status:</span>
+                <span className="font-semibold text-slate-200">
+                  {engineStatus.statusLabel}
+                </span>
+              </div>
+
+              {engineStatus.lastError && (
+                <div className="p-2 bg-rose-500/15 border border-rose-500/30 rounded-lg text-rose-300 text-[11px] leading-relaxed">
+                  <span className="font-semibold">Last load error: </span>
+                  {engineStatus.lastError}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-slate-800/80">
+                <p className="text-[11px] text-slate-400 leading-tight">
+                  Single-threaded WASM Stockfish 19 Lite with embedded NNUE network.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleTestEngine}
+                  disabled={isTestingEngine}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors shrink-0"
+                >
+                  {isTestingEngine ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Calculating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Test engine</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {engineTestResult && (
+                <div
+                  className={`p-2 rounded-lg border text-xs flex items-center justify-between ${
+                    engineTestResult.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  <div>
+                    <span className="font-semibold">Move: </span>
+                    <span className="font-mono text-slate-100">{engineTestResult.san || engineTestResult.bestMove}</span>
+                    <span className="text-slate-400 ml-2">({engineTestResult.timeTakenMs}ms)</span>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-slate-850 border border-slate-700 text-slate-300">
+                    {engineTestResult.engineUsed === 'stockfish' ? 'Stockfish 19 Lite' : 'Minimax Fallback'}
+                  </span>
+                </div>
+              )}
+            </div>
           </section>
 
           {/* Gemini API Key */}

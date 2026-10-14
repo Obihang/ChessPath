@@ -67,6 +67,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [gameResult, setGameResult] = useState<GameResult | null>(null);
   const [isAiThinking, setIsAiThinking] = useState<boolean>(false);
   const [copiedPgn, setCopiedPgn] = useState<boolean>(false);
+  const [activeEngine, setActiveEngine] = useState<'stockfish' | 'minimax'>('stockfish');
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
 
   // Clocks
   const [whiteTime, setWhiteTime] = useState<number>(0);
@@ -165,6 +167,10 @@ export const PlayView: React.FC<PlayViewProps> = ({
     } else {
       setPlayerColor('w');
       setBoardOrientation('w');
+    }
+
+    if (mode === 'ai') {
+      engineService.newGame();
     }
 
     // Clocks
@@ -268,6 +274,13 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
     try {
       const best = await engineService.getBestMove(currGame.fen(), difficulty);
+      const used = engineService.getLastEngineUsed();
+      setActiveEngine(used);
+      if (used === 'minimax') {
+        setFallbackNotice('Stockfish timed out; turn played via Minimax fallback');
+        setTimeout(() => setFallbackNotice(null), 4000);
+      }
+
       const move = currGame.move({
         from: best.from,
         to: best.to,
@@ -518,11 +531,29 @@ export const PlayView: React.FC<PlayViewProps> = ({
         </div>
 
         {mode === 'ai' && (
-          <span className="text-[11px] text-slate-400 font-medium">
-            {ENGINE_DIFFICULTIES[selectedDifficultyKey]?.label}
-          </span>
+          <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${
+                activeEngine === 'stockfish'
+                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                  : 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+              }`}
+            >
+              {activeEngine === 'stockfish' ? '⚡ Stockfish 19' : '🛡️ Minimax'}
+            </span>
+            <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+              {ENGINE_DIFFICULTIES[selectedDifficultyKey]?.label}
+            </span>
+          </div>
         )}
       </div>
+
+      {fallbackNotice && (
+        <div className="w-full max-w-[520px] px-3 py-1.5 bg-amber-500/15 border border-amber-500/40 rounded-xl text-amber-300 text-xs flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <span>{fallbackNotice}</span>
+        </div>
+      )}
 
       {/* Move History Strip */}
       <div className="w-full max-w-[520px]">
