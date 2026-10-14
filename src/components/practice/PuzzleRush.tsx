@@ -170,6 +170,7 @@ export const PuzzleRush: React.FC<PuzzleRushProps> = ({
           disabled={isGameOver}
           lastMove={lastMove}
           onMove={handleUserMove}
+          settings={settings}
         />
       </div>
 

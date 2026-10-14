@@ -188,6 +188,7 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
           disabled={status === 'solved'}
           lastMove={lastMove}
           onMove={handleUserMove}
+          settings={settings}
         />
       </div>
 
@@ -209,7 +210,7 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
                 onClick={onNext}
                 className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-colors"
               >
-                <span>Next Puzzle</span>
+                <span>{onNext ? 'Next Puzzle' : 'Finish'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             )}

@@ -160,6 +160,7 @@ export const EndgameDrillsView: React.FC<EndgameDrillsViewProps> = ({
           disabled={isCompleted || isBotThinking}
           lastMove={lastMove}
           onMove={handleUserMove}
+          settings={settings}
         />
       </div>
 

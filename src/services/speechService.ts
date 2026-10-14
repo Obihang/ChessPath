@@ -100,6 +100,7 @@ class SpeechService {
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private currentAudio: HTMLAudioElement | null = null;
   private isSpeakingState: boolean = false;
+  private retryAttempted: boolean = false;
   private cancelTimeout: any = null;
   private resumeInterval: any = null;
   private activeUtterances: Set<SpeechSynthesisUtterance> = new Set();
@@ -462,6 +463,8 @@ class SpeechService {
       return;
     }
 
+    this.retryAttempted = false;
+
     if (!text || !text.trim()) {
       this.logDiagnostic('warn', 'Empty text provided to speak(). Operation skipped.');
       return;
@@ -575,6 +578,11 @@ class SpeechService {
           let explanation = '';
           if (errCode === 'not-allowed') {
             explanation = 'BLOCKED by browser autoplay / permission policy. User must tap the page / test button to allow speech synthesis in this frame.';
+          } else if (errCode === 'synthesis-failed' && !this.retryAttempted) {
+             this.retryAttempted = true;
+             this.logDiagnostic('info', 'synthesis-failed error detected, retrying once in 500ms...');
+             setTimeout(() => this.speak(spokenText, options), 500);
+             return;
           } else if (errCode === 'canceled') {
             explanation = 'CANCELLED: speechSynthesis.cancel() was called or speech was pre-empted.';
           } else if (errCode === 'interrupted') {
