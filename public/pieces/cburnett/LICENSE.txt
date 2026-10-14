@@ -1,5 +1,4 @@
 Piece Set: cburnett
 Author: Colin M.L. Burnett
-License: Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)
-Source: Wikimedia Commons / Lichess
-URL: https://en.wikipedia.org/wiki/User:Cburnett
+License: GPLv2+
+Source: github.com/lichess-org/lila (public/piece/cburnett, see COPYING.md)

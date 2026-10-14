@@ -1,5 +1,4 @@
 Piece Set: merida
-Author: Armando H. Marroquín
-License: Free Art License / GPL Compatible
-Source: Lichess
-URL: https://github.com/lichess-org/lila
+Author: Armando Hernandez Marroquin
+License: GPLv2+
+Source: github.com/lichess-org/lila (public/piece/merida, see COPYING.md)

@@ -157,10 +157,11 @@ The output APK is generated at:
 
 - **License**: This project is licensed under the **GNU General Public License v3.0 (GPLv3)**. See the [LICENSE](./LICENSE) file for details.
 - **Chess Piece Sets**:
-  - **Cburnett** (Classic): Designed by **Colin M.L. Burnett**, licensed under **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**.
-  - **Mérida**: Designed by **Armando H. Marroquín**, licensed under **Free Art License / GPL Compatible**.
-  - **Staunty**: Designed by **Jean-Luc Schulz & Lichess**, licensed under **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**.
-  - **California**: Designed by **Wilfried Kaup**, licensed under **Creative Commons Attribution-ShareAlike 3.0 Unported (CC BY-SA 3.0)**.
+  - **Cburnett** (Classic): Designed by **Colin M.L. Burnett**, licensed under **GPLv2+**.
+  - **Mérida**: Designed by **Armando Hernandez Marroquin**, licensed under **GPLv2+**.
+  - **Fantasy**: Designed by **Maurizio Monge**, licensed under **MIT**.
+  - **Spatial**: Designed by **Maurizio Monge**, licensed under **MIT**.
+Source for all: [github.com/lichess-org/lila](https://github.com/lichess-org/lila) (see COPYING.md)
 - **Stockfish Engine**: Copyright (c) T. Romstad, M. Costalba, J. Kiiski, G. Linscott and Stockfish contributors. Licensed under the **GNU General Public License v3.0 (GPLv3)**.
 - **chess.js**: Copyright (c) Jeff Hlywa. Licensed under the **BSD-2-Clause License**.
 - **Icons**: Lucide Icons licensed under the **ISC License**.
