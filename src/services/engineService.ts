@@ -2,14 +2,14 @@ import { Chess } from 'chess.js';
 import { EngineDifficulty } from '../types/chess';
 
 export const ENGINE_DIFFICULTIES: Record<string, EngineDifficulty> = {
-  beginner: { elo: 800, label: 'Beginner (800 Elo)', depth: 1, skillLevel: 0, blunderRate: 0.4 },
-  casual: { elo: 1100, label: 'Casual (1100 Elo)', depth: 2, skillLevel: 1, blunderRate: 0.25 },
-  intermediate: { elo: 1400, label: 'Intermediate (1400 Elo)', depth: 3, skillLevel: 4, blunderRate: 0.1 },
-  advanced: { elo: 1700, label: 'Advanced (1700 Elo)', depth: 4, skillLevel: 8, blunderRate: 0.02 },
-  master: { elo: 2000, label: 'Master (2000+ Elo)', depth: 5, skillLevel: 14, blunderRate: 0.0 },
+  beginner: { elo: 1350, label: 'Beginner (Stockfish Level 0 - 1350 Elo)', depth: 1, skillLevel: 0, blunderRate: 0.35 },
+  casual: { elo: 1500, label: 'Casual (Stockfish Level 2 - 1500 Elo)', depth: 2, skillLevel: 2, blunderRate: 0.20 },
+  intermediate: { elo: 1800, label: 'Intermediate (Stockfish Level 7 - 1800 Elo)', depth: 4, skillLevel: 7, blunderRate: 0.05 },
+  advanced: { elo: 2100, label: 'Advanced (Stockfish Level 12 - 2100 Elo)', depth: 6, skillLevel: 12, blunderRate: 0.01 },
+  master: { elo: 2500, label: 'Master (Stockfish Level 20 - 2500+ Elo)', depth: 8, skillLevel: 20, blunderRate: 0.0 },
 };
 
-// Piece values in centipawns
+// Fallback minimax evaluation (used if worker fails or times out)
 const PIECE_VALUES: Record<string, number> = {
   p: 100,
   n: 320,
@@ -19,159 +19,43 @@ const PIECE_VALUES: Record<string, number> = {
   k: 20000,
 };
 
-// Simplified Piece-Square Tables (White perspective, flipped for Black)
-const PAWN_TABLE = [
-  0,  0,  0,  0,  0,  0,  0,  0,
-  50, 50, 50, 50, 50, 50, 50, 50,
-  10, 10, 20, 30, 30, 20, 10, 10,
-  5,  5, 10, 25, 25, 10,  5,  5,
-  0,  0,  0, 20, 20,  0,  0,  0,
-  5, -5,-10,  0,  0,-10, -5,  5,
-  5, 10, 10,-20,-20, 10, 10,  5,
-  0,  0,  0,  0,  0,  0,  0,  0
-];
-
-const KNIGHT_TABLE = [
-  -50,-40,-30,-30,-30,-30,-40,-50,
-  -40,-20,  0,  0,  0,  0,-20,-40,
-  -30,  0, 10, 15, 15, 10,  0,-30,
-  -30,  5, 15, 20, 20, 15,  5,-30,
-  -30,  0, 15, 20, 20, 15,  0,-30,
-  -30,  5, 10, 15, 15, 10,  5,-30,
-  -40,-20,  0,  5,  5,  0,-20,-40,
-  -50,-40,-30,-30,-30,-30,-40,-50
-];
-
-const BISHOP_TABLE = [
-  -20,-10,-10,-10,-10,-10,-10,-20,
-  -10,  0,  0,  0,  0,  0,  0,-10,
-  -10,  0,  5, 10, 10,  5,  0,-10,
-  -10,  5,  5, 10, 10,  5,  5,-10,
-  -10,  0, 10, 10, 10, 10,  0,-10,
-  -10, 10, 10, 10, 10, 10, 10,-10,
-  -10,  5,  0,  0,  0,  0,  5,-10,
-  -20,-10,-10,-10,-10,-10,-10,-20
-];
-
-const ROOK_TABLE = [
-  0,  0,  0,  0,  0,  0,  0,  0,
-  5, 10, 10, 10, 10, 10, 10,  5,
-  -5,  0,  0,  0,  0,  0,  0, -5,
-  -5,  0,  0,  0,  0,  0,  0, -5,
-  -5,  0,  0,  0,  0,  0,  0, -5,
-  -5,  0,  0,  0,  0,  0,  0, -5,
-  -5,  0,  0,  0,  0,  0,  0, -5,
-  0,  0,  0,  5,  5,  0,  0,  0
-];
-
-const QUEEN_TABLE = [
-  -20,-10,-10, -5, -5,-10,-10,-20,
-  -10,  0,  0,  0,  0,  0,  0,-10,
-  -10,  0,  5,  5,  5,  5,  0,-10,
-  -5,  0,  5,  5,  5,  5,  0, -5,
-  0,  0,  5,  5,  5,  5,  0, -5,
-  -10,  5,  5,  5,  5,  5,  0,-10,
-  -10,  0,  5,  0,  0,  0,  0,-10,
-  -20,-10,-10, -5, -5,-10,-10,-20
-];
-
-const KING_TABLE_MID = [
-  -30,-40,-40,-50,-50,-40,-40,-30,
-  -30,-40,-40,-50,-50,-40,-40,-30,
-  -30,-40,-40,-50,-50,-40,-40,-30,
-  -30,-40,-40,-50,-50,-40,-40,-30,
-  -20,-30,-30,-40,-40,-30,-30,-20,
-  -10,-20,-20,-20,-20,-20,-20,-10,
-  20, 20,  0,  0,  0,  0, 20, 20,
-  20, 30, 10,  0,  0, 10, 30, 20
-];
-
-function squareToIndex(sq: string): number {
-  const file = sq.charCodeAt(0) - 97; // a=0, h=7
-  const rank = 8 - parseInt(sq[1], 10); // 8=0, 1=7
-  return rank * 8 + file;
-}
-
 function evaluatePosition(game: Chess): number {
   let score = 0;
   const board = game.board();
-
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       const piece = board[r][c];
       if (!piece) continue;
-
-      const idx = r * 8 + c;
-      const flippedIdx = (7 - r) * 8 + c;
-      const tableIdx = piece.color === 'w' ? idx : flippedIdx;
-
-      let pieceVal = PIECE_VALUES[piece.type] || 0;
-      let posBonus = 0;
-
-      switch (piece.type) {
-        case 'p': posBonus = PAWN_TABLE[tableIdx]; break;
-        case 'n': posBonus = KNIGHT_TABLE[tableIdx]; break;
-        case 'b': posBonus = BISHOP_TABLE[tableIdx]; break;
-        case 'r': posBonus = ROOK_TABLE[tableIdx]; break;
-        case 'q': posBonus = QUEEN_TABLE[tableIdx]; break;
-        case 'k': posBonus = KING_TABLE_MID[tableIdx]; break;
-      }
-
-      const total = pieceVal + posBonus;
-      score += piece.color === 'w' ? total : -total;
+      const val = PIECE_VALUES[piece.type] || 0;
+      score += piece.color === 'w' ? val : -val;
     }
   }
-
   return score;
 }
 
-function minimax(
-  game: Chess,
-  depth: number,
-  alpha: number,
-  beta: number,
-  isMaximizing: boolean
-): number {
-  if (depth === 0 || game.isGameOver()) {
-    if (game.isCheckmate()) {
-      return isMaximizing ? -99999 + (5 - depth) : 99999 - (5 - depth);
-    }
-    if (game.isDraw()) return 0;
-    return evaluatePosition(game);
-  }
-
+function minimaxMove(game: Chess, depth: number): string | null {
   const moves = game.moves({ verbose: true });
-  // Simple move ordering: captures first
-  moves.sort((a, b) => (b.captured ? 1 : 0) - (a.captured ? 1 : 0));
+  if (moves.length === 0) return null;
+  
+  const isWhite = game.turn() === 'w';
+  let bestMove = moves[0];
+  let bestVal = isWhite ? -Infinity : Infinity;
 
-  if (isMaximizing) {
-    let maxEval = -Infinity;
-    for (const move of moves) {
-      game.move(move);
-      const ev = minimax(game, depth - 1, alpha, beta, false);
-      game.undo();
-      maxEval = Math.max(maxEval, ev);
-      alpha = Math.max(alpha, ev);
-      if (beta <= alpha) break;
+  for (const move of moves) {
+    game.move(move);
+    const val = evaluatePosition(game);
+    game.undo();
+    if (isWhite ? val > bestVal : val < bestVal) {
+      bestVal = val;
+      bestMove = move;
     }
-    return maxEval;
-  } else {
-    let minEval = Infinity;
-    for (const move of moves) {
-      game.move(move);
-      const ev = minimax(game, depth - 1, alpha, beta, true);
-      game.undo();
-      minEval = Math.min(minEval, ev);
-      beta = Math.min(beta, ev);
-      if (beta <= alpha) break;
-    }
-    return minEval;
   }
+  return `${bestMove.from}${bestMove.to}${bestMove.promotion || ''}`;
 }
 
 export class ChessEngineService {
   private worker: Worker | null = null;
-  private isWorkerReady: boolean = false;
+  private isReady: boolean = false;
 
   constructor() {
     this.initWorker();
@@ -180,95 +64,115 @@ export class ChessEngineService {
   private initWorker() {
     if (typeof window === 'undefined') return;
     try {
-      // Try to load bundled worker if present
-      this.worker = new Worker('/engine/stockfish.js');
+      const baseUrl = import.meta.env.BASE_URL || '/';
+      const workerUrl = `${baseUrl.endsWith('/') ? baseUrl : baseUrl + '/'}engine/stockfish.js`;
+      this.worker = new Worker(workerUrl);
+
       this.worker.onmessage = (e) => {
-        const text = typeof e.data === 'string' ? e.data : '';
-        if (text.includes('uciok') || text.includes('readyok')) {
-          this.isWorkerReady = true;
+        const msg = typeof e.data === 'string' ? e.data : '';
+        if (msg.includes('readyok') || msg.includes('uciok')) {
+          this.isReady = true;
         }
       };
+
       this.worker.postMessage('uci');
       this.worker.postMessage('isready');
-    } catch {
-      // Web Worker fallback is smoothly handled by our internal minimax
-      this.isWorkerReady = false;
+    } catch (e) {
+      console.warn('Stockfish Worker failed to initialize, will use fallback engine:', e);
+      this.worker = null;
     }
   }
 
-  /**
-   * Calculates the best move for the current FEN.
-   * Calibrated for beginner play when Elo < 1300.
-   */
   public async getBestMove(
     fen: string,
     difficulty: EngineDifficulty = ENGINE_DIFFICULTIES.intermediate
   ): Promise<{ from: string; to: string; promotion?: string; san?: string }> {
     const game = new Chess(fen);
-    const moves = game.moves({ verbose: true });
+    const legalMoves = game.moves({ verbose: true });
 
-    if (moves.length === 0) {
+    if (legalMoves.length === 0) {
       throw new Error('No legal moves available');
     }
 
-    // Beginner calibration: deliberate blunder / suboptimal choice
-    const isBlunder = Math.random() < difficulty.blunderRate;
-    if (isBlunder && moves.length > 1) {
-      // Pick a random legal move or second tier move
-      const nonCheckmates = moves.filter((m) => {
+    // Beginner/Casual blunder check
+    if (Math.random() < (difficulty.blunderRate || 0)) {
+      const nonMateMoves = legalMoves.filter(m => {
         game.move(m);
-        const givesMate = game.isCheckmate();
+        const mate = game.isCheckmate();
         game.undo();
-        return !givesMate;
+        return !mate;
       });
-      const pool = nonCheckmates.length > 0 ? nonCheckmates : moves;
-      const randomMove = pool[Math.floor(Math.random() * pool.length)];
-      return {
-        from: randomMove.from,
-        to: randomMove.to,
-        promotion: randomMove.promotion,
-        san: randomMove.san,
-      };
+      const pool = nonMateMoves.length > 0 ? nonMateMoves : legalMoves;
+      const chosen = pool[Math.floor(Math.random() * pool.length)];
+      return { from: chosen.from, to: chosen.to, promotion: chosen.promotion, san: chosen.san };
     }
 
-    // Minimax Search
-    const isWhite = game.turn() === 'w';
-    let bestMove = moves[0];
-    let bestValue = isWhite ? -Infinity : Infinity;
+    // Try Stockfish Worker with timeout
+    if (this.worker) {
+      try {
+        const bestMoveUCI = await new Promise<string>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Stockfish timeout'));
+          }, 3000);
 
-    // Small delay to simulate realistic "thinking"
-    await new Promise((resolve) => setTimeout(resolve, Math.max(300, Math.min(800, difficulty.depth * 150))));
+          const handleMessage = (e: MessageEvent) => {
+            const data = typeof e.data === 'string' ? e.data : '';
+            if (data.startsWith('bestmove')) {
+              clearTimeout(timeout);
+              if (this.worker) {
+                this.worker.removeEventListener('message', handleMessage);
+              }
+              const parts = data.split(' ');
+              resolve(parts[1] || '');
+            }
+          };
 
-    for (const move of moves) {
-      game.move(move);
-      const val = minimax(
-        game,
-        difficulty.depth - 1,
-        -Infinity,
-        Infinity,
-        !isWhite
-      );
-      game.undo();
+          if (this.worker) {
+            this.worker.addEventListener('message', handleMessage);
+            const skillLevel = difficulty.skillLevel ?? 5;
+            const elo = Math.max(1320, difficulty.elo ?? 1500);
+            this.worker.postMessage(`setoption name Skill Level value ${skillLevel}`);
+            this.worker.postMessage('setoption name UCI_LimitStrength value true');
+            this.worker.postMessage(`setoption name UCI_Elo value ${elo}`);
+            this.worker.postMessage(`position fen ${fen}`);
+            this.worker.postMessage(`go movetime ${Math.min(500, (difficulty.depth || 3) * 100)}`);
+          } else {
+            clearTimeout(timeout);
+            reject(new Error('No worker'));
+          }
+        });
 
-      if (isWhite) {
-        if (val > bestValue) {
-          bestValue = val;
-          bestMove = move;
+        if (bestMoveUCI && bestMoveUCI.length >= 4) {
+          const from = bestMoveUCI.substring(0, 2);
+          const to = bestMoveUCI.substring(2, 4);
+          const promotion = bestMoveUCI.length > 4 ? bestMoveUCI[4] : undefined;
+          
+          // Verify legality with chess.js
+          const match = legalMoves.find(m => m.from === from && m.to === to && (!promotion || m.promotion === promotion));
+          if (match) {
+            return { from: match.from, to: match.to, promotion: match.promotion, san: match.san };
+          }
         }
-      } else {
-        if (val < bestValue) {
-          bestValue = val;
-          bestMove = move;
-        }
+      } catch {
+        // Fallback to minimax
       }
     }
 
-    return {
-      from: bestMove.from,
-      to: bestMove.to,
-      promotion: bestMove.promotion,
-      san: bestMove.san,
-    };
+    // Fallback Minimax
+    const fallbackUci = minimaxMove(game, Math.min(3, difficulty.depth || 2));
+    if (fallbackUci && fallbackUci.length >= 4) {
+      const from = fallbackUci.substring(0, 2);
+      const to = fallbackUci.substring(2, 4);
+      const promotion = fallbackUci.length > 4 ? fallbackUci[4] : undefined;
+      const match = legalMoves.find(m => m.from === from && m.to === to && (!promotion || m.promotion === promotion));
+      if (match) {
+        return { from: match.from, to: match.to, promotion: match.promotion, san: match.san };
+      }
+    }
+
+    // Ultimate fallback: first legal move
+    const fallback = legalMoves[0];
+    return { from: fallback.from, to: fallback.to, promotion: fallback.promotion, san: fallback.san };
   }
 }
 

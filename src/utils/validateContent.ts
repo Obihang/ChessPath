@@ -54,7 +54,6 @@ export function validateAllContent() {
         console.warn(`[ContentValidator] Invalid opening move line: ${op.id} (${op.name})`);
       }
 
-      // Validate variations
       if (op.variations) {
         for (const v of op.variations) {
           const vChess = new Chess();
@@ -67,6 +66,7 @@ export function validateAllContent() {
             }
           }
           if (!vValid) {
+            openingsFailed++;
             console.warn(`[ContentValidator] Invalid opening variation move line: ${op.id} - ${v.name}`);
           }
         }
@@ -96,7 +96,6 @@ export function validateAllContent() {
         console.warn(`[ContentValidator] Invalid gambit move line: ${g.id} (${g.name})`);
       }
 
-      // Validate variations
       if (g.variations) {
         for (const v of g.variations) {
           const vChess = new Chess();
@@ -109,6 +108,7 @@ export function validateAllContent() {
             }
           }
           if (!vValid) {
+            gambitsFailed++;
             console.warn(`[ContentValidator] Invalid gambit variation move line: ${g.id} - ${v.name}`);
           }
         }
@@ -132,4 +132,17 @@ export function validateAllContent() {
   console.log('============================================');
 
   return summary;
+}
+
+// If executed directly as a script
+if (typeof process !== 'undefined' && process.argv && process.argv[1]?.includes('validateContent')) {
+  const summary = validateAllContent();
+  const totalFailed = summary.puzzles.failed + summary.openings.failed + summary.gambits.failed;
+  if (totalFailed > 0) {
+    console.error(`Validation failed with ${totalFailed} errors.`);
+    process.exit(1);
+  } else {
+    console.log('All content validated successfully!');
+    process.exit(0);
+  }
 }

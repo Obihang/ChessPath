@@ -27,7 +27,10 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci || npm install --legacy-peer-deps
+        run: npm ci
+
+      - name: Validate content
+        run: npm run validate
 
       - name: Build static web app
         run: npm run build
