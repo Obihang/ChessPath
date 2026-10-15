@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AppSettings, BoardThemeId } from '../../types/chess';
+import { AppSettings, AIProviderId, BoardThemeId } from '../../types/chess';
 import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import { storageService } from '../../services/storageService';
@@ -130,12 +130,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleApiKeyChange = (newKey: string) => {
-    const trimmed = newKey.trim();
-    // If user is pasting an API key and natural voice was off, automatically turn natural voice on!
-    const autoEnableNatural = trimmed.length > 0 && !localSettings.useNaturalVoice;
+  const handleProviderChange = (provider: AIProviderId) => {
+    let defaultBaseUrl = '';
+    let defaultModel = '';
+    if (provider === 'groq') {
+      defaultBaseUrl = 'https://api.groq.com/openai/v1';
+      defaultModel = 'llama-3.3-70b-versatile';
+    } else if (provider === 'openrouter') {
+      defaultBaseUrl = 'https://openrouter.ai/api/v1';
+      defaultModel = 'anthropic/claude-3.5-sonnet';
+    } else if (provider === 'openai') {
+      defaultBaseUrl = 'https://api.openai.com/v1';
+      defaultModel = 'gpt-4o-mini';
+    } else if (provider === 'bytez') {
+      defaultBaseUrl = 'https://api.bytez.com/v1';
+      defaultModel = 'Qwen/Qwen2.5-72B-Instruct';
+    }
+
     const updated: AppSettings = {
       ...localSettings,
+      aiProvider: provider,
+      aiBaseUrl: localSettings.aiBaseUrl || defaultBaseUrl,
+      aiModelName: localSettings.aiModelName || defaultModel,
+    };
+    setLocalSettings(updated);
+    storageService.saveSettings(updated);
+    onUpdateSettings(updated);
+  };
+
+  const handleApiKeyChange = (newKey: string) => {
+    const trimmed = newKey.trim();
+    const autoEnableNatural = trimmed.length > 0 && !localSettings.useNaturalVoice && localSettings.aiProvider === 'gemini';
+    const updated: AppSettings = {
+      ...localSettings,
+      aiApiKey: trimmed,
       geminiApiKey: trimmed,
       useNaturalVoice: autoEnableNatural ? true : localSettings.useNaturalVoice,
     };
@@ -143,6 +171,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     storageService.saveSettings(updated);
     onUpdateSettings(updated);
     setVoiceTestStatus(null);
+  };
+
+  const handleBaseUrlChange = (url: string) => {
+    const updated: AppSettings = {
+      ...localSettings,
+      aiBaseUrl: url.trim(),
+    };
+    setLocalSettings(updated);
+    storageService.saveSettings(updated);
+    onUpdateSettings(updated);
+  };
+
+  const handleModelNameChange = (model: string) => {
+    const updated: AppSettings = {
+      ...localSettings,
+      aiModelName: model.trim(),
+    };
+    setLocalSettings(updated);
+    storageService.saveSettings(updated);
+    onUpdateSettings(updated);
   };
 
   const handleTestEngine = async () => {
@@ -780,36 +828,99 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </section>
 
-          {/* Gemini API Key */}
+          {/* AI Provider & API Key */}
           <section className="space-y-3 border-t border-slate-800/80 pt-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
               <Key className="w-4 h-4" />
-              <span>Gemini AI Tutor Key</span>
+              <span>AI Coach & Provider Settings</span>
             </div>
 
             <p className="text-xs text-slate-400 leading-relaxed">
-              Enables Gemini AI position breakdowns, tactical hints, post-game reviews, and natural voice. Stored strictly in your browser's local storage and never sent anywhere else.
+              Use Google Gemini, GroqCloud, OpenRouter, OpenAI, Bytez, or any OpenAI-compatible API for AI position analysis, tactical hints, and live coaching.
             </p>
 
-            <div className="space-y-2">
-              <div className="relative">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  placeholder="Paste your Gemini API key (AIzaSy...)"
-                  value={localSettings.geminiApiKey}
-                  onChange={(e) => handleApiKeyChange(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 pr-10 text-xs text-slate-200 placeholder-slate-600 focus:outline-hidden focus:border-amber-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(!showKey)}
-                  className="absolute right-2.5 top-2 text-slate-500 hover:text-slate-300"
+            <div className="space-y-3">
+              {/* Provider Selector */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">AI Provider</label>
+                <select
+                  value={localSettings.aiProvider || 'gemini'}
+                  onChange={(e) => handleProviderChange(e.target.value as AIProviderId)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-hidden focus:border-amber-500 cursor-pointer"
                 >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+                  <option value="gemini">Google Gemini (Default)</option>
+                  <option value="groq">Groq Cloud (Fast LLMs)</option>
+                  <option value="openrouter">OpenRouter (Claude, Llama, etc.)</option>
+                  <option value="openai">OpenAI (GPT-4o, GPT-4o-mini)</option>
+                  <option value="bytez">Bytez API</option>
+                  <option value="custom">Custom OpenAI-Compatible API</option>
+                </select>
               </div>
 
-              {localSettings.geminiApiKey ? (
+              {/* API Key Input */}
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">API Key</label>
+                <div className="relative">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    placeholder={
+                      localSettings.aiProvider === 'groq'
+                        ? 'Paste Groq API key (gsk_...)'
+                        : localSettings.aiProvider === 'openrouter'
+                        ? 'Paste OpenRouter API key (sk-or-...)'
+                        : localSettings.aiProvider === 'openai'
+                        ? 'Paste OpenAI API key (sk-...)'
+                        : 'Paste API Key / Gemini Key (AIzaSy...)'
+                    }
+                    value={localSettings.aiApiKey || localSettings.geminiApiKey || ''}
+                    onChange={(e) => handleApiKeyChange(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 pr-10 text-xs text-slate-200 placeholder-slate-600 focus:outline-hidden focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="absolute right-2.5 top-2 text-slate-500 hover:text-slate-300"
+                  >
+                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Base URL & Model Name for non-gemini or custom */}
+              {localSettings.aiProvider && localSettings.aiProvider !== 'gemini' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">API Base URL</label>
+                    <input
+                      type="text"
+                      placeholder="https://api.groq.com/openai/v1"
+                      value={localSettings.aiBaseUrl || ''}
+                      onChange={(e) => handleBaseUrlChange(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-hidden focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">Model Name</label>
+                    <input
+                      type="text"
+                      placeholder={
+                        localSettings.aiProvider === 'groq'
+                          ? 'llama-3.3-70b-versatile'
+                          : localSettings.aiProvider === 'openrouter'
+                          ? 'anthropic/claude-3.5-sonnet'
+                          : localSettings.aiProvider === 'openai'
+                          ? 'gpt-4o-mini'
+                          : 'model-name'
+                      }
+                      value={localSettings.aiModelName || ''}
+                      onChange={(e) => handleModelNameChange(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-hidden focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {(localSettings.aiApiKey || localSettings.geminiApiKey) ? (
                 <div className="space-y-2 pt-1">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium">

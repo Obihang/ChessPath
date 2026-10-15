@@ -65,6 +65,8 @@ export interface GameResult {
   reason: GameTermination;
 }
 
+export type AIProviderId = 'gemini' | 'groq' | 'openrouter' | 'openai' | 'bytez' | 'custom';
+
 export interface AppSettings {
   boardTheme: BoardThemeId;
   soundEnabled: boolean;
@@ -72,6 +74,10 @@ export interface AppSettings {
   autoFlipBoard: boolean;
   allowUndo: boolean;
   geminiApiKey: string;
+  aiProvider: AIProviderId;
+  aiApiKey: string;
+  aiBaseUrl: string;
+  aiModelName: string;
   voiceEnabled: boolean;
   voiceRate: number;
   voiceVolume: number;

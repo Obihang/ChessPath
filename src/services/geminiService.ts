@@ -23,16 +23,18 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
   return URL.createObjectURL(blob);
 }
 
-function getGeminiClient(customKey?: string): GoogleGenAI | null {
+function getActiveApiKey(customKey?: string): string {
   const settings = storageService.getSettings();
   const envKey =
     (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
     (typeof process !== 'undefined' && process.env ? process.env.GEMINI_API_KEY : '') ||
     '';
+  const rawKey = (customKey || settings.aiApiKey || settings.geminiApiKey || envKey || '').trim();
+  return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
+}
 
-  const rawKey = (customKey || settings.geminiApiKey || envKey || '').trim();
-  const apiKey = rawKey.replace(/^["'`]|["'`]$/g, '').trim();
-
+function getGeminiClient(customKey?: string): GoogleGenAI | null {
+  const apiKey = getActiveApiKey(customKey);
   if (!apiKey) {
     return null;
   }
@@ -57,20 +59,104 @@ export function resetActiveTextModel(): void {
   rememberedTextModel = DEFAULT_TEXT_MODEL;
 }
 
+async function callOpenAICompatible(
+  messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
+  systemInstruction?: string
+): Promise<string> {
+  const settings = storageService.getSettings();
+  const provider = settings.aiProvider || 'gemini';
+  const apiKey = getActiveApiKey();
+  if (!apiKey) {
+    throw new Error('NO_KEY');
+  }
+
+  let baseUrl = '';
+  let defaultModel = '';
+
+  switch (provider) {
+    case 'openrouter':
+      baseUrl = settings.aiBaseUrl || 'https://openrouter.ai/api/v1';
+      defaultModel = settings.aiModelName || 'anthropic/claude-3.5-sonnet';
+      break;
+    case 'groq':
+      baseUrl = settings.aiBaseUrl || 'https://api.groq.com/openai/v1';
+      defaultModel = settings.aiModelName || 'llama-3.3-70b-versatile';
+      break;
+    case 'openai':
+      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
+      defaultModel = settings.aiModelName || 'gpt-4o-mini';
+      break;
+    case 'bytez':
+      baseUrl = settings.aiBaseUrl || 'https://api.bytez.com/v1';
+      defaultModel = settings.aiModelName || 'Qwen/Qwen2.5-72B-Instruct';
+      break;
+    case 'custom':
+      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
+      defaultModel = settings.aiModelName || 'gpt-3.5-turbo';
+      break;
+    default:
+      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
+      defaultModel = settings.aiModelName || 'gpt-3.5-turbo';
+  }
+
+  const formattedMessages: any[] = [];
+  if (systemInstruction) {
+    formattedMessages.push({ role: 'system', content: systemInstruction });
+  }
+  for (const m of messages) {
+    const text = m.parts ? m.parts.map((p) => p.text).join('\n') : (m as any).content;
+    const role = m.role === 'model' ? 'assistant' : m.role;
+    formattedMessages.push({ role, content: text });
+  }
+
+  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+      ...(provider === 'openrouter'
+        ? {
+            'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://chesspath.app',
+            'X-Title': 'ChessPath AI',
+          }
+        : {}),
+    },
+    body: JSON.stringify({
+      model: defaultModel,
+      messages: formattedMessages,
+      temperature: 0.7,
+      max_tokens: 500,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      throw new Error('Invalid API Key (401/403)');
+    }
+    if (res.status === 429) {
+      throw new Error('429 Rate limit exceeded');
+    }
+    throw new Error(`API Error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || 'No response from API.';
+}
+
 export const geminiService = {
   hasKey(): boolean {
     const settings = storageService.getSettings();
-    return !!(settings.geminiApiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : ''));
+    return !!(settings.aiApiKey || settings.geminiApiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : ''));
   },
 
   async explainPosition(fen: string, moveHistory: string[] = []): Promise<string> {
-    const ai = getGeminiClient();
-    if (!ai) {
-      return 'To get personalized AI position breakdowns and strategic plans, paste your free Gemini API key in Settings. All other app features remain fully functional offline!';
+    const settings = storageService.getSettings();
+    if (!this.hasKey()) {
+      return 'To get personalized AI position breakdowns and strategic plans, configure your AI API key in Settings. All other app features remain fully functional offline!';
     }
 
-    try {
-      const prompt = `You are ChessPath's encouraging chess mentor. Explain the current position in plain, instructive English for an improving chess player.
+    const prompt = `You are ChessPath's encouraging chess mentor. Explain the current position in plain, instructive English for an improving chess player.
 Board FEN: "${fen}"
 Move History: ${moveHistory.slice(-8).join(' ') || 'Starting position'}
 
@@ -80,6 +166,20 @@ Please cover:
 3. The main threats to watch out for
 Keep your answer concise (2-3 short paragraphs), warm, encouraging, and clear without overwhelming engine notation.`;
 
+    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
+      try {
+        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are an expert chess mentor.');
+      } catch (e: any) {
+        return `AI Coach response error: ${e?.message || 'Check your API key in Settings.'}`;
+      }
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return 'To get personalized AI position breakdowns, configure your API key in Settings.';
+    }
+
+    try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
@@ -93,19 +193,32 @@ Keep your answer concise (2-3 short paragraphs), warm, encouraging, and clear wi
   },
 
   async getHint(fen: string, goal: string = 'find the best move', playerColor: string = 'White'): Promise<string> {
-    const ai = getGeminiClient();
-    if (!ai) {
+    const settings = storageService.getSettings();
+    if (!this.hasKey()) {
       return 'Look for undefended pieces, potential knight forks, or checks that force the opponent’s king to move.';
     }
 
-    try {
-      const prompt = `You are a chess coach giving a subtle hint to a student.
+    const prompt = `You are a chess coach giving a subtle hint to a student.
 Current FEN: "${fen}"
 Goal: "${goal}"
 Side to move: "${playerColor}"
 
 Provide a gentle nudge (1-2 sentences) pointing to the relevant sector of the board or tactical motif, WITHOUT explicitly spelling out the exact move coordinates. Be encouraging!`;
 
+    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
+      try {
+        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are a helpful chess coach.');
+      } catch {
+        return 'Focus on piece activity: look for forcing moves, checks, and double attacks.';
+      }
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return 'Look for undefended pieces, potential knight forks, or checks that force the opponent’s king to move.';
+    }
+
+    try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
@@ -118,13 +231,12 @@ Provide a gentle nudge (1-2 sentences) pointing to the relevant sector of the bo
   },
 
   async analyzeGame(moves: string[], result: string): Promise<string> {
-    const ai = getGeminiClient();
-    if (!ai) {
-      return 'Game completed! Paste your Gemini API key in Settings to receive grandmaster post-game reports and lessons to learn.';
+    const settings = storageService.getSettings();
+    if (!this.hasKey()) {
+      return 'Game completed! Configure your AI API key in Settings to receive grandmaster post-game reports and lessons to learn.';
     }
 
-    try {
-      const prompt = `You are a grandmaster mentor reviewing a completed chess game.
+    const prompt = `You are a grandmaster mentor reviewing a completed chess game.
 Moves: ${moves.join(' ')}
 Result: ${result}
 
@@ -133,6 +245,20 @@ Write a human-friendly review with:
 2. Exactly 2-3 key strategic lessons the student should take away to improve their play
 Keep the tone encouraging, constructive, and inspiring!`;
 
+    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
+      try {
+        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are a grandmaster chess mentor.');
+      } catch {
+        return 'Well played! Review your moves and look for missed opportunities to control the center.';
+      }
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return 'Game completed! Configure your API key in Settings to receive grandmaster post-game reports.';
+    }
+
+    try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
         contents: prompt,
@@ -148,6 +274,17 @@ Keep the tone encouraging, constructive, and inspiring!`;
     messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
     systemInstruction: string
   ): Promise<string> {
+    const settings = storageService.getSettings();
+    const provider = settings.aiProvider || 'gemini';
+
+    if (!getActiveApiKey()) {
+      throw new Error('NO_KEY');
+    }
+
+    if (provider !== 'gemini') {
+      return callOpenAICompatible(messages, systemInstruction);
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
       throw new Error('NO_KEY');
@@ -184,6 +321,17 @@ Keep the tone encouraging, constructive, and inspiring!`;
     systemInstruction: string,
     maxSentences: number = 2
   ): Promise<string> {
+    const settings = storageService.getSettings();
+    const provider = settings.aiProvider || 'gemini';
+
+    if (!getActiveApiKey()) {
+      throw new Error('NO_KEY');
+    }
+
+    if (provider !== 'gemini') {
+      return callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], systemInstruction);
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
       throw new Error('NO_KEY');
