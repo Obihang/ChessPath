@@ -79,6 +79,10 @@ export interface AppSettings {
   useNaturalVoice: boolean;
   pieceSet: string;
   pieceShadow: boolean;
+  liveCoachEnabled: boolean;
+  coachMode: CoachMode;
 }
+
+export type CoachMode = 'learning' | 'criticizing' | 'simple' | 'competitive';
 
 export type ActiveTab = 'learn' | 'practice' | 'play' | 'openings' | 'progress';

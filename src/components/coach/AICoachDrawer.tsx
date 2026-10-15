@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AppSettings } from '../../types/chess';
+import { AppSettings, CoachMode } from '../../types/chess';
 import { geminiService } from '../../services/geminiService';
 import { speechService } from '../../services/speechService';
 import { storageService } from '../../services/storageService';
+import { engineService } from '../../services/engineService';
+import { coachCommentaryService } from '../../services/coachCommentaryService';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
 import {
   Sparkles,
@@ -59,7 +61,36 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   const [isListening, setIsListening] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [conversationMode, setConversationMode] = useState<'learning' | 'criticizing' | 'simple' | 'competitive'>('learning');
+  const [conversationMode, setConversationMode] = useState<CoachMode>(settings.coachMode || 'learning');
+
+  useEffect(() => {
+    if (settings.coachMode && settings.coachMode !== conversationMode) {
+      setConversationMode(settings.coachMode);
+    }
+  }, [settings.coachMode]);
+
+  const handleModeChange = (newMode: CoachMode) => {
+    setConversationMode(newMode);
+    const updated = { ...settings, coachMode: newMode };
+    onUpdateSettings?.(updated);
+    storageService.saveSettings(updated);
+  };
+
+  // Keep full history of live coach comments in the Coach Drawer
+  useEffect(() => {
+    const unsubscribe = coachCommentaryService.subscribeToCommentary((res) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `live-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          sender: 'coach',
+          text: `[Live Move Commentary - ${res.facts.moveSan}]: ${res.comment}`,
+          timestamp: res.timestamp || new Date(),
+        },
+      ]);
+    });
+    return unsubscribe;
+  }, []);
 
   const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -117,18 +148,36 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     setIsLoading(true);
 
     try {
-      // Build conversation history (last 12)
+      // Fetch engine analysis for current position to ground advice in truth
+      let evalContext = '';
+      try {
+        const evalInfo = await engineService.evaluate(currentFen, 300);
+        if (evalInfo && evalInfo.bestMove) {
+          evalContext = ` Engine analysis: evaluation is ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp, best move is ${evalInfo.bestMove}.`;
+        }
+      } catch {
+        // Continue if evaluation times out
+      }
+
+      // Build conversation history (last 12 messages)
       const history = messages
         .slice(-12)
         .map((m) => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] }));
-      
-      // Append current
+
+      // Append current user message
       history.push({ role: 'user', parts: [{ text: textToSend.trim() }] });
 
-      const replyText = await geminiService.chat(
-        history as any,
-        `You are a chess coach. Your conversation mode is: ${conversationMode}. Current FEN: ${currentFen}. Move History: ${moveHistory.join(' ')}`
-      );
+      const systemInstruction = `You are an expert chess coach.
+Coach Mode: ${conversationMode}.
+Current FEN: "${currentFen}".
+Last 10 moves: ${moveHistory.slice(-10).join(' ') || 'Starting position'}.${evalContext}
+
+Strict instructions:
+- Only suggest or analyze moves that are strictly legal in the given FEN or provided by the engine. Never hallucinate illegal moves.
+- If you are unsure about an evaluation or tactical line, state so honestly.
+- Do not write verbose essays or lists. Keep your reply concise, constructive, and helpful for the player.`;
+
+      const replyText = await geminiService.chat(history as any, systemInstruction);
 
       const coachMsg: ChatMessage = {
         id: `coach-${Date.now()}`,
@@ -144,10 +193,21 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
       }
     } catch (e: any) {
       let errorMessage = 'An unexpected error occurred.';
-      if (e.message === 'NO_KEY') errorMessage = 'Please add your Gemini API key in Settings.';
-      else if (e.message.includes('401') || e.message.includes('403')) errorMessage = 'Invalid Gemini API key.';
-      else if (e.message.includes('429')) errorMessage = 'Gemini rate limit exceeded. Please wait a minute.';
-      else if (e.message.includes('Failed to fetch')) errorMessage = 'Offline or network error.';
+      const msg = e?.message || '';
+
+      if (msg === 'NO_KEY') {
+        errorMessage = 'No Gemini API key set. Please paste your free key in Settings to chat with the coach.';
+      } else if (msg.includes('401') || msg.includes('403') || msg.includes('API_KEY_INVALID')) {
+        errorMessage = 'Invalid Gemini API key (401/403). Please verify your API key in Settings.';
+      } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+        errorMessage = 'Gemini quota or rate limit reached (429). Please wait about a minute and try again.';
+      } else if (msg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        errorMessage = 'You appear to be offline or network connection was lost.';
+      } else if (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound')) {
+        errorMessage = 'Gemini model error. Please check your model configuration or project permissions.';
+      } else {
+        errorMessage = `Coach service error: ${msg}`;
+      }
 
       const errorMsg: ChatMessage = {
         id: `err-${Date.now()}`,
@@ -156,7 +216,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, errorMsg]);
-      speechService.logDiagnostic('error', `Chat error: ${e.message}`);
+      speechService.logDiagnostic('error', `Chat error: ${msg}`);
     } finally {
       setIsLoading(false);
     }

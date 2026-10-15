@@ -119,19 +119,37 @@ export class ChessEngineService {
       return new Promise((resolve) => {
         let bestMove = '';
         let score = 0;
-        
+        let finished = false;
+
+        const cleanup = () => {
+          if (!finished) {
+            finished = true;
+            clearTimeout(timer);
+            this.worker?.removeEventListener('message', handleMessage);
+          }
+        };
+
+        const timer = setTimeout(() => {
+          cleanup();
+          resolve({ score, bestMove });
+        }, Math.max(1000, ms + 700));
+
         const handleMessage = (e: MessageEvent) => {
           const data = typeof e.data === 'string' ? e.data : '';
           if (data.includes('score cp')) {
             const match = data.match(/score cp (-?\d+)/);
-            if (match) score = parseInt(match[1]);
+            if (match) score = parseInt(match[1], 10);
           } else if (data.includes('score mate')) {
-             const match = data.match(/score mate (-?\d+)/);
-             if (match) score = parseInt(match[1]) > 0 ? 9999 : -9999;
+            const match = data.match(/score mate (-?\d+)/);
+            if (match) {
+              const mateVal = parseInt(match[1], 10);
+              score = mateVal > 0 ? 10000 - mateVal * 100 : -10000 - mateVal * 100;
+            }
           }
           if (data.startsWith('bestmove')) {
-            bestMove = data.split(' ')[1];
-            this.worker?.removeEventListener('message', handleMessage);
+            const parts = data.split(' ');
+            bestMove = parts[1] || '';
+            cleanup();
             resolve({ score, bestMove });
           }
         };
@@ -141,8 +159,15 @@ export class ChessEngineService {
         this.worker?.postMessage(`go movetime ${ms}`);
       });
     }
-    // Minimax fallback
-    return { score: 0, bestMove: '' };
+
+    // Minimax fallback if available
+    try {
+      const best = await this.getBestMove(fen, ENGINE_DIFFICULTIES.intermediate, true);
+      const uci = `${best.from}${best.to}${best.promotion || ''}`;
+      return { score: 0, bestMove: uci };
+    } catch {
+      return { score: 0, bestMove: '' };
+    }
   }
 
   public async newGame(): Promise<void> {

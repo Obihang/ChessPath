@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import {
   AppSettings,
+  CoachMode,
   GameResult,
   MoveRecord,
   PieceColor,
@@ -11,12 +12,15 @@ import {
   UserColorChoice,
 } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
+import { LiveCommentaryCard } from '../board/LiveCommentaryCard';
 import { LiveChatIndicator } from '../coach/LiveChatIndicator';
 import { GameClock } from './GameClock';
 import { CapturedPieces } from '../board/CapturedPieces';
 import { MoveHistory } from '../board/MoveHistory';
 import { engineService, ENGINE_DIFFICULTIES } from '../../services/engineService';
 import { soundService } from '../../services/audioService';
+import { storageService } from '../../services/storageService';
+import { useLiveCoach } from '../../hooks/useLiveCoach';
 import {
   RotateCcw,
   Undo2,
@@ -30,6 +34,8 @@ import {
   AlertCircle,
   Copy,
   Check,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 
 interface PlayViewProps {
@@ -37,6 +43,7 @@ interface PlayViewProps {
   onOpenSettings: () => void;
   onOpenCoach: () => void;
   onPositionChange?: (fen: string, history: string[]) => void;
+  onUpdateSettings?: (settings: AppSettings) => void;
 }
 
 const TIME_CONTROLS: TimeControl[] = [
@@ -51,6 +58,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   onOpenSettings,
   onOpenCoach,
   onPositionChange,
+  onUpdateSettings,
 }) => {
   // Game Configuration
   const [mode, setMode] = useState<PlayMode>('ai');
@@ -58,6 +66,32 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [playerColor, setPlayerColor] = useState<PieceColor>('w');
   const [selectedDifficultyKey, setSelectedDifficultyKey] = useState<string>('intermediate');
   const [selectedTimeControl, setSelectedTimeControl] = useState<TimeControl>(TIME_CONTROLS[0]);
+
+  // Live AI Coach Hook (handles move analysis, Stockfish facts, Gemini commentary, speech)
+  const {
+    latestComment,
+    commentFacts,
+    isMuted: isCoachMuted,
+    isAnalyzing: isCoachAnalyzing,
+    processMove: processCoachMove,
+    toggleMute: toggleCoachMute,
+    dismissComment: dismissCoachComment,
+    repeatComment: repeatCoachComment,
+    resetCoach: resetLiveCoach,
+  } = useLiveCoach({
+    settings,
+    playerColor,
+  });
+
+  const handleToggleLiveCoach = () => {
+    const updated = storageService.updateSetting('liveCoachEnabled', !settings.liveCoachEnabled);
+    onUpdateSettings?.(updated);
+  };
+
+  const handleCoachModeChange = (newMode: CoachMode) => {
+    const updated = storageService.updateSetting('coachMode', newMode);
+    onUpdateSettings?.(updated);
+  };
 
   // Active Game State
   const [game, setGame] = useState<Chess>(() => new Chess());
@@ -147,6 +181,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
   // Initialize a New Game
   const startNewGame = useCallback(() => {
+    resetLiveCoach();
     const newGame = new Chess();
     setGame(newGame);
     setMoves([]);
@@ -281,6 +316,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
         setTimeout(() => setFallbackNotice(null), 4000);
       }
 
+      const prevFen = currGame.fen();
       const move = currGame.move({
         from: best.from,
         to: best.to,
@@ -302,21 +338,24 @@ export const PlayView: React.FC<PlayViewProps> = ({
           }
         }
 
+        const moveRec: MoveRecord = {
+          san: move.san,
+          from: move.from,
+          to: move.to,
+          color: move.color,
+          piece: move.piece,
+          captured: move.captured,
+          fen: currGame.fen(),
+        };
+
         setLastMove({ from: move.from, to: move.to });
-        setMoves((prev) => [
-          ...prev,
-          {
-            san: move.san,
-            from: move.from,
-            to: move.to,
-            color: move.color,
-            piece: move.piece,
-            captured: move.captured,
-            fen: currGame.fen(),
-          },
-        ]);
+        setMoves((prev) => [...prev, moveRec]);
         calculateCapturedAndAdvantage(currGame);
         checkTermination(currGame);
+
+        // Process live coach commentary for opponent move
+        const currentSanList = [...moves.map((m) => m.san), move.san];
+        processCoachMove(moveRec, prevFen, currGame.fen(), false, currentSanList);
       }
     } catch (e) {
       console.warn('AI move calculation failed', e);
@@ -329,22 +368,26 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const handleUserMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
     setLastMove({ from: moveData.from, to: moveData.to });
 
+    const prevFen =
+      moves.length > 0 ? moves[moves.length - 1].fen : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     const history = game.history({ verbose: true });
     const lastHist = history[history.length - 1];
 
     if (lastHist) {
-      setMoves((prev) => [
-        ...prev,
-        {
-          san: lastHist.san,
-          from: lastHist.from,
-          to: lastHist.to,
-          color: lastHist.color,
-          piece: lastHist.piece,
-          captured: lastHist.captured,
-          fen: game.fen(),
-        },
-      ]);
+      const userMoveRec: MoveRecord = {
+        san: lastHist.san,
+        from: lastHist.from,
+        to: lastHist.to,
+        color: lastHist.color,
+        piece: lastHist.piece,
+        captured: lastHist.captured,
+        fen: game.fen(),
+      };
+      setMoves((prev) => [...prev, userMoveRec]);
+
+      // Process live coach commentary for player move
+      const currentSanList = [...moves.map((m) => m.san), lastHist.san];
+      processCoachMove(userMoveRec, prevFen, game.fen(), true, currentSanList);
     }
 
     calculateCapturedAndAdvantage(game);
@@ -375,6 +418,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   // Takeback / Undo
   const handleUndo = () => {
     if (moves.length === 0 || gameResult || isAiThinking) return;
+    resetLiveCoach();
 
     if (mode === 'ai') {
       // In Vs AI mode, undo two moves (player move + AI move) unless AI hasn't moved yet
@@ -495,7 +539,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
           disabled={isBoardDisabled}
           lastMove={lastMove}
           onMove={handleUserMove}
-          settings={settings}
         />
         <LiveChatIndicator onClick={onOpenCoach} />
       </div>
@@ -545,6 +588,98 @@ export const PlayView: React.FC<PlayViewProps> = ({
             <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
               {ENGINE_DIFFICULTIES[selectedDifficultyKey]?.label}
             </span>
+          </div>
+        )}
+      </div>
+
+      {/* Live Coach Commentary Card */}
+      {settings.liveCoachEnabled && latestComment && (
+        <LiveCommentaryCard
+          comment={latestComment}
+          isMuted={isCoachMuted}
+          onToggleMute={toggleCoachMute}
+          mode={settings.coachMode}
+          facts={commentFacts}
+          onOpenCoach={onOpenCoach}
+          onDismiss={dismissCoachComment}
+          onRepeat={repeatCoachComment}
+        />
+      )}
+
+      {/* Live Coach Controls: On/Off Switch & Mode Selector */}
+      <div className="w-full max-w-[520px] bg-slate-900/80 border border-slate-800 rounded-xl p-2.5 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div
+              className={`p-1.5 rounded-lg ${
+                settings.liveCoachEnabled ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>Live AI Coach</span>
+                {isCoachAnalyzing && (
+                  <span className="text-[10px] text-amber-400 flex items-center gap-1 animate-pulse">
+                    <Loader2 className="w-3 h-3 animate-spin" /> analyzing move...
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-slate-400">
+                Stockfish fact extraction & real-time commentary
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={settings.liveCoachEnabled}
+              onClick={handleToggleLiveCoach}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                settings.liveCoachEnabled ? 'bg-amber-500' : 'bg-slate-700'
+              }`}
+              title={settings.liveCoachEnabled ? 'Disable Live Coach' : 'Enable Live Coach'}
+            >
+              <span
+                className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                  settings.liveCoachEnabled ? 'translate-x-4' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+
+        {/* Mode Selector (in sync with Coach Drawer) */}
+        {settings.liveCoachEnabled && (
+          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1.5 flex-wrap">
+            <span className="text-[11px] text-slate-400 font-medium">Mode:</span>
+            <div className="grid grid-cols-4 gap-1 flex-1 max-w-sm">
+              {(
+                [
+                  { id: 'learning', label: 'Full Learning' },
+                  { id: 'criticizing', label: 'Criticizing' },
+                  { id: 'simple', label: 'Simple' },
+                  { id: 'competitive', label: 'Competitive' },
+                ] as { id: CoachMode; label: string }[]
+              ).map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => handleCoachModeChange(m.id)}
+                  className={`px-1.5 py-1 text-[11px] rounded-md font-medium transition-colors text-center truncate ${
+                    settings.coachMode === m.id
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
+                      : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title={m.label}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>

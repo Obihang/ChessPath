@@ -33,6 +33,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   useNaturalVoice: false,
   pieceSet: 'cburnett',
   pieceShadow: true,
+  liveCoachEnabled: false,
+  coachMode: 'learning',
 };
 
 export const storageService = {

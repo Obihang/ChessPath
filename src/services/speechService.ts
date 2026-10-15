@@ -578,11 +578,14 @@ class SpeechService {
           let explanation = '';
           if (errCode === 'not-allowed') {
             explanation = 'BLOCKED by browser autoplay / permission policy. User must tap the page / test button to allow speech synthesis in this frame.';
-          } else if (errCode === 'synthesis-failed' && !this.retryAttempted) {
-             this.retryAttempted = true;
-             this.logDiagnostic('info', 'synthesis-failed error detected, retrying once in 500ms...');
-             setTimeout(() => this.speak(spokenText, options), 500);
-             return;
+          } else if (errCode === 'synthesis-failed') {
+            if (!this.retryAttempted) {
+              this.retryAttempted = true;
+              this.logDiagnostic('info', 'synthesis-failed error detected, retrying once in 500ms...');
+              setTimeout(() => this.speak(spokenText, options), 500);
+              return;
+            }
+            explanation = 'Browser speech synthesis engine failed to render audio stream (common in headless/sandboxed frames).';
           } else if (errCode === 'canceled') {
             explanation = 'CANCELLED: speechSynthesis.cancel() was called or speech was pre-empted.';
           } else if (errCode === 'interrupted') {
@@ -593,8 +596,9 @@ class SpeechService {
             explanation = `Code: ${errCode}`;
           }
 
+          const isNonFatal = errCode === 'canceled' || errCode === 'interrupted' || errCode === 'synthesis-failed';
           this.logDiagnostic(
-            'error',
+            isNonFatal ? 'warn' : 'error',
             `SpeechSynthesis onerror event fired: [${errCode}] - ${explanation}`,
             {
               error: errCode,

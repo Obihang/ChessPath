@@ -45,6 +45,18 @@ function getGeminiClient(customKey?: string): GoogleGenAI | null {
   }
 }
 
+export const DEFAULT_TEXT_MODEL = 'gemini-3.8-flash';
+export const FALLBACK_TEXT_MODEL = 'gemini-flash-latest';
+let rememberedTextModel = DEFAULT_TEXT_MODEL;
+
+export function getActiveTextModel(): string {
+  return rememberedTextModel;
+}
+
+export function resetActiveTextModel(): void {
+  rememberedTextModel = DEFAULT_TEXT_MODEL;
+}
+
 export const geminiService = {
   hasKey(): boolean {
     const settings = storageService.getSettings();
@@ -134,8 +146,7 @@ Keep the tone encouraging, constructive, and inspiring!`;
 
   async chat(
     messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
-    systemInstruction: string,
-    model: string = 'gemini-3.8-flash'
+    systemInstruction: string
   ): Promise<string> {
     const ai = getGeminiClient();
     if (!ai) {
@@ -144,14 +155,69 @@ Keep the tone encouraging, constructive, and inspiring!`;
 
     try {
       const response = await ai.models.generateContent({
-        model,
+        model: rememberedTextModel,
         contents: messages,
         config: { systemInstruction },
       });
       return response.text || 'No response from AI.';
     } catch (e: any) {
-      if (model === 'gemini-3.8-flash' && (e.message.includes('404') || e.message.includes('model not found'))) {
-        return this.chat(messages, systemInstruction, 'gemini-flash-latest');
+      const msg = e?.message || '';
+      if (
+        rememberedTextModel === DEFAULT_TEXT_MODEL &&
+        (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound'))
+      ) {
+        console.warn(`Model ${DEFAULT_TEXT_MODEL} not found, retrying with ${FALLBACK_TEXT_MODEL}...`);
+        rememberedTextModel = FALLBACK_TEXT_MODEL;
+        const fallbackRes = await ai.models.generateContent({
+          model: rememberedTextModel,
+          contents: messages,
+          config: { systemInstruction },
+        });
+        return fallbackRes.text || 'No response from AI.';
+      }
+      throw e;
+    }
+  },
+
+  async generateLiveCommentary(
+    prompt: string,
+    systemInstruction: string,
+    maxSentences: number = 2
+  ): Promise<string> {
+    const ai = getGeminiClient();
+    if (!ai) {
+      throw new Error('NO_KEY');
+    }
+
+    try {
+      const response = await ai.models.generateContent({
+        model: rememberedTextModel,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          systemInstruction,
+          maxOutputTokens: 120,
+          temperature: 0.7,
+        },
+      });
+      return response.text || '';
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (
+        rememberedTextModel === DEFAULT_TEXT_MODEL &&
+        (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound'))
+      ) {
+        console.warn(`Model ${DEFAULT_TEXT_MODEL} not found, retrying live commentary with ${FALLBACK_TEXT_MODEL}...`);
+        rememberedTextModel = FALLBACK_TEXT_MODEL;
+        const fallbackRes = await ai.models.generateContent({
+          model: rememberedTextModel,
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          config: {
+            systemInstruction,
+            maxOutputTokens: 120,
+            temperature: 0.7,
+          },
+        });
+        return fallbackRes.text || '';
       }
       throw e;
     }

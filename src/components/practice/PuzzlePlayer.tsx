@@ -188,7 +188,6 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
           disabled={status === 'solved'}
           lastMove={lastMove}
           onMove={handleUserMove}
-          settings={settings}
         />
       </div>
 

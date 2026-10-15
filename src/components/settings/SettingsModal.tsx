@@ -49,6 +49,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [isTestingVoice, setIsTestingVoice] = useState(false);
   const [testingType, setTestingType] = useState<'gemini' | 'browser' | null>(null);
+  const [isTestingChat, setIsTestingChat] = useState(false);
   const [voiceTestStatus, setVoiceTestStatus] = useState<{ type: 'info' | 'success' | 'error'; message: string } | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -598,20 +599,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {localSettings.geminiApiKey && (
                     <button
                       type="button"
+                      disabled={isTestingChat || isTestingVoice}
                       onClick={async () => {
+                        setIsTestingChat(true);
+                        setVoiceTestStatus({ type: 'info', message: 'Testing Coach Chat with Gemini API...' });
                         try {
                           const reply = await geminiService.chat(
                             [{ role: 'user', parts: [{ text: 'Say hello in one sentence.' }] }],
-                            'You are a helpful assistant.'
+                            'You are ChessPath AI Coach. Say hello in one friendly sentence.'
                           );
-                          alert(`Coach says: ${reply}`);
+                          setVoiceTestStatus({ type: 'success', message: `Coach reply: "${reply}"` });
+                          speechService.logDiagnostic('info', `Coach chat test succeeded: ${reply}`);
+                          if (localSettings.voiceEnabled) {
+                            speechService.speakWithCoach(reply, localSettings);
+                          }
                         } catch (e: any) {
-                          alert(`Chat error: ${e.message}`);
+                          const msg = e?.message || '';
+                          let formattedError = '';
+                          if (msg === 'NO_KEY') {
+                            formattedError = 'No API key set. Please paste your Gemini API key above.';
+                          } else if (msg.includes('401') || msg.includes('403') || msg.includes('API_KEY_INVALID')) {
+                            formattedError = 'Invalid API key (401/403). Please verify your Gemini API key in Settings.';
+                          } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+                            formattedError = 'Gemini quota or rate limit reached (429). Please wait a minute and try again.';
+                          } else if (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound')) {
+                            formattedError = 'Gemini model error: model not found.';
+                          } else if (msg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+                            formattedError = 'Network error: you appear to be offline.';
+                          } else {
+                            formattedError = `Coach service error: ${msg}`;
+                          }
+                          speechService.logDiagnostic('error', `Coach chat test failed: ${formattedError}`, { error: e });
+                          setVoiceTestStatus({ type: 'error', message: formattedError });
+                        } finally {
+                          setIsTestingChat(false);
                         }
                       }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-medium transition-colors"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
                     >
-                      <Bot className="w-3.5 h-3.5" />
+                      {isTestingChat ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />}
                       <span>Test Coach Chat</span>
                     </button>
                   )}

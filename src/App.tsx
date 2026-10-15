@@ -153,6 +153,7 @@ export default function App() {
             onOpenSettings={() => setIsSettingsOpen(true)}
             onOpenCoach={() => setIsCoachOpen(true)}
             onPositionChange={handlePositionChange}
+            onUpdateSettings={handleUpdateSettings}
           />
         )}
 

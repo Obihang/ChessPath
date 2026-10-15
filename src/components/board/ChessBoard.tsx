@@ -1,11 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Chess, Move, Square as ChessSquare } from 'chess.js';
-import { BoardThemeId, PieceColor, PieceType, AppSettings } from '../../types/chess';
+import { BoardThemeId, PieceColor, PieceType } from '../../types/chess';
 import { PieceIcon } from './PieceIcon';
 import { soundService } from '../../services/audioService';
-import { LiveCommentaryCard } from './LiveCommentaryCard';
-import { geminiService } from '../../services/geminiService';
-import { engineService } from '../../services/engineService';
 
 export interface ChessBoardProps {
   game: Chess;
@@ -15,7 +12,6 @@ export interface ChessBoardProps {
   disabled?: boolean;
   lastMove?: { from: string; to: string } | null;
   onMove?: (move: { from: string; to: string; promotion?: string; san?: string }) => void;
-  settings: AppSettings;
 }
 
 const BOARD_THEMES: Record<
@@ -62,14 +58,10 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   disabled = false,
   lastMove = null,
   onMove,
-  settings,
 }) => {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const [legalMoves, setLegalMoves] = useState<Move[]>([]);
   const [pendingPromotion, setPendingPromotion] = useState<{ from: string; to: string } | null>(null);
-  const [commentary, setCommentary] = useState<string | null>(null);
-  const [isCommentaryMuted, setIsCommentaryMuted] = useState(false);
-  const lastFenRef = useRef(game.fen());
 
   // Drag state
   const [draggingSquare, setDraggingSquare] = useState<string | null>(null);
@@ -86,30 +78,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
     setLegalMoves([]);
     setPendingPromotion(null);
   }, [game.fen(), disabled]);
-
-  // Commentary Logic
-  useEffect(() => {
-    const handleMove = async () => {
-      const fen = game.fen();
-      if (fen === lastFenRef.current) return;
-      lastFenRef.current = fen;
-
-      if (!settings.pieceSet) return; // Commentary enabled if pieceSet is chosen (hack for toggle)
-
-      const { score, bestMove } = await engineService.evaluate(fen);
-      
-      try {
-        const comment = await geminiService.chat(
-            [{role: 'user', parts: [{text: `FEN: ${fen}, Eval: ${score}`}]}],
-            'Act as a chess coach commentary mode.'
-        );
-        setCommentary(comment);
-      } catch (e) {
-        setCommentary(`Engine best move: ${bestMove}. Eval: ${score}`);
-      }
-    };
-    handleMove();
-  }, [game.fen(), settings.pieceSet]);
 
   const inCheck = game.inCheck();
   let checkSquare: string | null = null;
@@ -253,7 +221,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
 
   return (
     <div className="relative w-full max-w-[520px] aspect-square mx-auto select-none touch-manipulation">
-      <LiveCommentaryCard comment={commentary} isMuted={isCommentaryMuted} onToggleMute={() => setIsCommentaryMuted(!isCommentaryMuted)} />
       {/* Outer wooden border / bezel */}
       <div className="w-full h-full p-2.5 sm:p-3.5 bg-slate-900 border-2 border-slate-800 rounded-2xl shadow-2xl flex flex-col justify-center">
         {/* The 8x8 Grid */}
