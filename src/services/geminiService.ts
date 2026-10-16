@@ -109,11 +109,17 @@ async function callOpenAICompatible(
     formattedMessages.push({ role, content: text });
   }
 
-  const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+  let endpoint = baseUrl.trim().replace(/\/+$/, '');
+  if (!endpoint.endsWith('/chat/completions')) {
+    endpoint = `${endpoint}/chat/completions`;
+  }
+
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
+      ...(provider === 'bytez' ? { 'bytez-api-key': apiKey } : {}),
       ...(provider === 'openrouter'
         ? {
             'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://chesspath.app',
@@ -132,12 +138,15 @@ async function callOpenAICompatible(
   if (!res.ok) {
     const errText = await res.text();
     if (res.status === 401 || res.status === 403) {
-      throw new Error('Invalid API Key (401/403)');
+      throw new Error(`Invalid API Key for ${provider} (401/403)`);
     }
     if (res.status === 429) {
-      throw new Error('429 Rate limit exceeded');
+      throw new Error(`429 Rate limit exceeded on ${provider}`);
     }
-    throw new Error(`API Error ${res.status}: ${errText}`);
+    if (res.status === 404) {
+      throw new Error(`404 Model or Endpoint not found (${defaultModel}). Check base URL and model.`);
+    }
+    throw new Error(`API Error ${res.status}: ${errText.slice(0, 160)}`);
   }
 
   const data = await res.json();
@@ -462,5 +471,104 @@ Keep the tone encouraging, constructive, and inspiring!`;
       'Welcome to ChessPath! Your mentor is ready.',
       key
     );
+  },
+
+  async testProviderConnection(options?: {
+    provider?: string;
+    apiKey?: string;
+    baseUrl?: string;
+    modelName?: string;
+  }): Promise<{ success: boolean; reply?: string; error?: string }> {
+    const settings = storageService.getSettings();
+    const provider = options?.provider || settings.aiProvider || 'gemini';
+    const apiKey = (options?.apiKey || getActiveApiKey()).trim();
+
+    if (!apiKey) {
+      return { success: false, error: `No API key provided for ${provider}. Please enter a valid API key.` };
+    }
+
+    if (provider === 'gemini') {
+      const ai = getGeminiClient(apiKey);
+      if (!ai) {
+        return { success: false, error: 'Failed to initialize Gemini client with key.' };
+      }
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: 'Say "Chess coach connection verified!" in one short sentence.',
+        });
+        return { success: true, reply: response.text?.trim() || 'Connected to Gemini successfully!' };
+      } catch (e: any) {
+        const msg = e?.message || 'Failed to connect to Gemini.';
+        return { success: false, error: msg };
+      }
+    }
+
+    // OpenAI-compatible providers: groq, openrouter, bytez, openai, custom
+    let baseUrl = options?.baseUrl || settings.aiBaseUrl || '';
+    let modelName = options?.modelName || settings.aiModelName || '';
+
+    if (!baseUrl) {
+      if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
+      else if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1';
+      else if (provider === 'bytez') baseUrl = 'https://api.bytez.com/v1';
+      else if (provider === 'openai') baseUrl = 'https://api.openai.com/v1';
+      else baseUrl = 'https://api.openai.com/v1';
+    }
+
+    if (!modelName) {
+      if (provider === 'groq') modelName = 'llama-3.3-70b-versatile';
+      else if (provider === 'openrouter') modelName = 'anthropic/claude-3.5-sonnet';
+      else if (provider === 'bytez') modelName = 'Qwen/Qwen2.5-72B-Instruct';
+      else if (provider === 'openai') modelName = 'gpt-4o-mini';
+      else modelName = 'gpt-3.5-turbo';
+    }
+
+    let endpoint = baseUrl.trim().replace(/\/+$/, '');
+    if (!endpoint.endsWith('/chat/completions')) {
+      endpoint = `${endpoint}/chat/completions`;
+    }
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          ...(provider === 'bytez' ? { 'bytez-api-key': apiKey } : {}),
+          ...(provider === 'openrouter'
+            ? {
+                'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://chesspath.app',
+                'X-Title': 'ChessPath AI',
+              }
+            : {}),
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [
+            { role: 'user', content: 'Say "Chess coach connection verified!" in one short sentence.' },
+          ],
+          temperature: 0.7,
+          max_tokens: 60,
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        if (res.status === 401 || res.status === 403) {
+          return { success: false, error: `Invalid API key for ${provider} (HTTP ${res.status}). Please check your key.` };
+        }
+        if (res.status === 404) {
+          return { success: false, error: `Endpoint or model not found (HTTP 404). Check Base URL and Model (${modelName}).` };
+        }
+        return { success: false, error: `API Error (HTTP ${res.status}): ${errText.slice(0, 160)}` };
+      }
+
+      const data = await res.json();
+      const reply = data.choices?.[0]?.message?.content?.trim() || 'Connected successfully!';
+      return { success: true, reply };
+    } catch (e: any) {
+      return { success: false, error: e?.message || `Network error connecting to ${provider}.` };
+    }
   },
 };

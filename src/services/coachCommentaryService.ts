@@ -75,8 +75,8 @@ export const coachCommentaryService = {
   shouldModeComment(mode: CoachMode, facts: MoveFacts, isPlayerMove: boolean): boolean {
     switch (mode) {
       case 'learning':
-        // Full Learning: comment after each of the player's moves
-        return isPlayerMove;
+        // Full Learning: comment after each player move, plus significant opponent moves (check, blunder, or large swing)
+        return isPlayerMove || facts.isCheck || facts.classification === 'blunder' || facts.evalSwing > 150;
 
       case 'criticizing':
         // Criticizing: only on inaccuracy, mistake, blunder, plus one short compliment for great
@@ -241,15 +241,18 @@ export const coachCommentaryService = {
       };
     }
 
-    // 4. Check if Gemini key exists
+    // 4. Check if API key exists
     if (!geminiService.hasKey()) {
       const templateComment = this.getFallbackComment(facts, mode);
-      return {
+      const result: CommentaryResult = {
         comment: templateComment,
         facts,
         mode,
         source: 'template',
+        timestamp: new Date(),
       };
+      this.notifyListeners(result);
+      return result;
     }
 
     // 5. Build strict factual prompt

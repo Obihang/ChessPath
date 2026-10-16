@@ -37,7 +37,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   useNaturalVoice: false,
   pieceSet: 'cburnett',
   pieceShadow: true,
-  liveCoachEnabled: false,
+  liveCoachEnabled: true,
   coachMode: 'learning',
 };
 

@@ -211,10 +211,14 @@ class SpeechService {
     soundService.initCtx();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-          this.logDiagnostic('info', 'Audio gesture unlock: window.speechSynthesis.resume() triggered.');
+        window.speechSynthesis.resume();
+        if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+          const primer = new SpeechSynthesisUtterance(' ');
+          primer.volume = 0.01;
+          primer.rate = 1.0;
+          window.speechSynthesis.speak(primer);
         }
+        this.logDiagnostic('info', 'Audio gesture unlock: window.speechSynthesis.resume() triggered.');
       } catch {
         // Ignored
       }
@@ -337,8 +341,9 @@ class SpeechService {
     const spokenText = convertChessNotationToSpokenText(text);
 
     // Try Gemini Natural Voice if enabled and key exists
-    const hasKey = !!(settings.geminiApiKey || geminiService.hasKey());
-    if (settings.useNaturalVoice && hasKey) {
+    const isGeminiProvider = !settings.aiProvider || settings.aiProvider === 'gemini';
+    const hasKey = !!(settings.geminiApiKey || (isGeminiProvider && geminiService.hasKey()));
+    if (settings.useNaturalVoice && isGeminiProvider && hasKey) {
       try {
         this.logDiagnostic('info', 'Attempting Gemini Natural Voice generation (model: gemini-3.8-flash-lite-tts)...');
         options.onStart?.();
@@ -361,21 +366,24 @@ class SpeechService {
           if (played) {
             return { usedNatural: true };
           }
+          this.isSpeakingState = false;
           this.logDiagnostic('warn', 'Audio playback failed through Web Audio / HTML5. Falling back to browser SpeechSynthesis...');
         } else {
+          this.isSpeakingState = false;
           this.logDiagnostic(
             'warn',
             `Gemini Natural Voice error: "${result.error || 'Failed to generate'}". Falling back to browser SpeechSynthesis...`
           );
         }
       } catch (err: any) {
+        this.isSpeakingState = false;
         this.logDiagnostic(
           'warn',
           `Gemini Natural Voice exception: "${err?.message || err}". Falling back to browser SpeechSynthesis...`
         );
       }
     } else {
-      if (settings.useNaturalVoice && !hasKey) {
+      if (settings.useNaturalVoice && isGeminiProvider && !hasKey) {
         this.logDiagnostic('info', 'Natural Voice enabled, but no Gemini key configured. Using offline Web Speech API.');
       } else {
         this.logDiagnostic('info', 'Using offline Web Speech API (speechSynthesis).');
