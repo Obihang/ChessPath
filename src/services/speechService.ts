@@ -7,6 +7,7 @@
 import { AppSettings } from '../types/chess';
 import { geminiService } from './geminiService';
 import { soundService } from './audioService';
+import { audioCacheService } from './audioCacheService';
 
 // Phonetic converter for chess algebraic notation
 export function convertChessNotationToSpokenText(text: string): string {
@@ -153,7 +154,7 @@ class SpeechService {
   }
 
   public stop(reason: string = 'User requested stop') {
-    soundService.stopActiveSpeech();
+    soundService.stopActiveSpeech(40);
     if (this.currentAudio) {
       try {
         this.currentAudio.pause();
@@ -164,13 +165,146 @@ class SpeechService {
       this.currentAudio = null;
     }
     this.isSpeakingState = false;
-    this.logDiagnostic('info', `Stopped active audio playback (${reason}).`);
+    this.logDiagnostic('info', `Stopped active audio playback smoothly (${reason}).`);
   }
 
   /**
-   * Universal Coach Speech Dispatcher:
-   * Calls Gemini TTS model (gemini-3.8-flash-lite-tts / gemini-3.8-flash-tts) using Gemini API Key,
-   * converts returned audio to WAV, caches in IndexedDB, and plays via Web Audio HTML5 with speed control.
+   * Plays instant cached verdict phrase ("Great move.", "Good move.", "Inaccuracy.", "Mistake.", "Blunder.")
+   * directly from IndexedDB without making any network API calls.
+   */
+  public async speakVerdictInstant(
+    classification: 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder',
+    settings: AppSettings
+  ): Promise<boolean> {
+    if (!settings.voiceEnabled) return false;
+
+    const phraseMap: Record<string, string> = {
+      great: 'Great move.',
+      good: 'Good move.',
+      inaccuracy: 'Inaccuracy.',
+      mistake: 'Mistake.',
+      blunder: 'Blunder.',
+    };
+
+    const phrase = phraseMap[classification] || 'Good move.';
+    const voice = settings.geminiVoice || 'Kore';
+
+    try {
+      const cached = await audioCacheService.getClip(phrase, voice);
+      if (cached) {
+        this.logDiagnostic('start', `Playing instant cached verdict audio: "${phrase}"`);
+        await soundService.playAudioArrayBuffer(
+          cached,
+          settings.voiceVolume,
+          undefined,
+          settings.voiceRate
+        );
+        return true;
+      } else {
+        const res = await geminiService.generateNaturalVoice(phrase, settings.geminiApiKey);
+        if (res.success && res.audioBuffer) {
+          await soundService.playAudioArrayBuffer(
+            res.audioBuffer,
+            settings.voiceVolume,
+            undefined,
+            settings.voiceRate
+          );
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('speakVerdictInstant error:', e);
+    }
+    return false;
+  }
+
+  /**
+   * Pre-generates short verdict clips into IndexedDB in the background.
+   */
+  public async pregenerateVerdictPhrases(settings: AppSettings): Promise<void> {
+    const voice = settings.geminiVoice || 'Kore';
+    await audioCacheService.pregenerateVerdictPhrases(voice, (text) =>
+      geminiService.generateNaturalVoice(text, settings.geminiApiKey)
+    );
+  }
+
+  /**
+   * Speaks coach explanation using Gemini STREAMING TTS.
+   * Schedules PCM chunks as they arrive so first audio starts in ~1 second.
+   */
+  public async speakWithCoachStream(
+    text: string,
+    settings: AppSettings,
+    options: {
+      onStart?: () => void;
+      onFirstAudio?: (timeToFirstAudioMs: number) => void;
+      onEnd?: () => void;
+      onError?: (err: unknown) => void;
+    } = {}
+  ): Promise<{ usedNatural: boolean; timeToFirstAudioMs: number; error?: string }> {
+    if (!settings.voiceEnabled) {
+      return { usedNatural: false, timeToFirstAudioMs: 0, error: 'Voice disabled' };
+    }
+
+    if (!text || !text.trim()) {
+      return { usedNatural: false, timeToFirstAudioMs: 0 };
+    }
+
+    const spokenText = convertChessNotationToSpokenText(text);
+    const callStartTime = Date.now();
+    let firstAudioTimeMs = 0;
+
+    const streamSession = soundService.createPcmStreamSession(
+      settings.voiceVolume,
+      settings.voiceRate
+    );
+
+    options.onStart?.();
+    this.isSpeakingState = true;
+
+    try {
+      const res = await geminiService.generateNaturalVoiceStream(
+        spokenText,
+        (pcmChunk) => {
+          streamSession.pushChunk(pcmChunk);
+          if (!firstAudioTimeMs) {
+            firstAudioTimeMs = Date.now() - callStartTime;
+            options.onFirstAudio?.(firstAudioTimeMs);
+            this.logDiagnostic('start', `Streaming TTS first audio started in ${firstAudioTimeMs} ms.`);
+          }
+        },
+        settings.geminiApiKey
+      );
+
+      if (res.success) {
+        this.isSpeakingState = false;
+        options.onEnd?.();
+        return {
+          usedNatural: true,
+          timeToFirstAudioMs: firstAudioTimeMs || (Date.now() - callStartTime),
+        };
+      }
+
+      // Fallback to unary TTS if streaming fails
+      this.logDiagnostic('warn', 'Streaming TTS failed, falling back to unary TTS');
+      const fallbackRes = await this.speakWithCoach(text, settings, options);
+      return {
+        usedNatural: fallbackRes.usedNatural,
+        timeToFirstAudioMs: Date.now() - callStartTime,
+        error: fallbackRes.error,
+      };
+    } catch (err: any) {
+      this.isSpeakingState = false;
+      this.logDiagnostic('error', `Streaming TTS exception: ${err?.message || err}`);
+      options.onError?.(err);
+      return { usedNatural: false, timeToFirstAudioMs: 0, error: err?.message };
+    }
+  }
+
+  /**
+   * Universal Coach Speech Dispatcher (Unary Fallback):
+   * Calls Gemini TTS model using Gemini API Key,
+   * converts returned audio to WAV, caches in IndexedDB, and plays via Web Audio with speed control.
    */
   public async speakWithCoach(
     text: string,

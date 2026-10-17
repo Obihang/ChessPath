@@ -4,6 +4,7 @@ import { geminiService } from './geminiService';
 import { speechService } from './speechService';
 import { engineService } from './engineService';
 import { storageService } from './storageService';
+import { enforceLengthCaps } from '../utils/audioUtils';
 
 export type MoveClassification = 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 
@@ -41,8 +42,35 @@ export interface CommentaryResult {
   timestamp?: Date;
 }
 
+export interface MoveTimingDiagnostic {
+  moveSan: string;
+  mover: 'player' | 'opponent';
+  engineMs: number;
+  textGenMs: number;
+  timeToFirstAudioMs: number;
+  totalMs: number;
+  timestamp: string;
+}
+
+const timingLogs: MoveTimingDiagnostic[] = [];
+
+export function recordMoveTiming(entry: MoveTimingDiagnostic) {
+  timingLogs.unshift(entry);
+  if (timingLogs.length > 5) {
+    timingLogs.pop();
+  }
+  console.log(
+    `[CoachTiming] Move ${entry.moveSan} (${entry.mover}): Engine ${entry.engineMs}ms | Text ${entry.textGenMs}ms | FirstAudio ${entry.timeToFirstAudioMs}ms | Total ${entry.totalMs}ms`
+  );
+}
+
+export function getMoveTimingLogs(): MoveTimingDiagnostic[] {
+  return [...timingLogs];
+}
+
 // In-memory cache by FEN + mode
 const commentaryCache = new Map<string, string>();
+const precomputeCache = new Map<string, { score: number; bestMoveUci: string }>();
 
 // 429 cooldown state
 let rateLimitedUntil = 0;
@@ -52,6 +80,23 @@ type CommentaryListener = (result: CommentaryResult) => void;
 const commentaryListeners = new Set<CommentaryListener>();
 
 export const coachCommentaryService = {
+  /**
+   * Precomputes evaluation for player's turn in background while player thinks
+   */
+  async precomputePlayerTurn(fen: string): Promise<void> {
+    if (precomputeCache.has(fen)) return;
+    try {
+      const res = await engineService.evaluate(fen, 250);
+      precomputeCache.set(fen, { score: res.score, bestMoveUci: res.bestMove || '' });
+      if (precomputeCache.size > 10) {
+        const oldestKey = Array.from(precomputeCache.keys())[0];
+        precomputeCache.delete(oldestKey);
+      }
+    } catch {
+      // Ignored
+    }
+  },
+
   /**
    * Classify move based on engine centipawn loss and flags
    */
@@ -73,86 +118,21 @@ export const coachCommentaryService = {
 
   /**
    * Determine if the selected mode should comment on this move.
-   * If false, no API call is made.
+   * Player moves ALWAYS get feedback in ALL modes.
+   * Opponent moves get a comment ONLY for big eval swing (>=150 cp), check, or blunder.
    */
   shouldModeComment(mode: CoachMode, facts: MoveFacts, isPlayerMove: boolean): boolean {
-    switch (mode) {
-      case 'learning':
-        // Full Learning: comment after each player move, plus significant opponent moves (check, blunder, or large swing)
-        return isPlayerMove || facts.isCheck || facts.classification === 'blunder' || facts.evalSwing > 150;
-
-      case 'criticizing':
-        // Criticizing: only on inaccuracy, mistake, blunder, plus one short compliment for great
-        if (facts.classification === 'great') return true;
-        if (facts.classification === 'inaccuracy' || facts.classification === 'mistake' || facts.classification === 'blunder') {
-          return true;
-        }
-        return false;
-
-      case 'simple':
-        // Simple: only on captures, checks, mistakes/blunders, mate threats
-        if (facts.isCapture || facts.isCheck) return true;
-        if (facts.classification === 'mistake' || facts.classification === 'blunder') return true;
-        if (Math.abs(facts.evalAfter) > 7000) return true; // mate threat
-        return false;
-
-      case 'competitive':
-        // Competitive: only when eval swings > 150 cp or game phase changes
-        return facts.evalSwing > 150 || !!facts.isPhaseChange;
-
-      default:
-        return true;
+    if (isPlayerMove) {
+      return true; // Always give feedback on player moves in ALL modes!
     }
+    return facts.evalSwing >= 150 || facts.isCheck || facts.classification === 'blunder';
   },
 
   /**
-   * Sentence limit rule per mode
+   * Strip markdown formatting and enforce strict word & sentence caps per coach mode
    */
-  getMaxSentencesForMode(mode: CoachMode): number {
-    switch (mode) {
-      case 'learning':
-        return 3;
-      case 'criticizing':
-        return 2;
-      case 'simple':
-        return 1;
-      case 'competitive':
-        return 2;
-      default:
-        return 2;
-    }
-  },
-
-  /**
-   * Strip markdown formatting and truncate to the mode's sentence limit
-   */
-  cleanAndTruncateComment(rawText: string, maxSentences: number): string {
-    if (!rawText) return '';
-
-    // Strip markdown formatting: bold, italic, code blocks, headers, bullet points
-    let clean = rawText
-      .replace(/[*_#`~]/g, '')
-      .replace(/^[\s-•*+>]+/gm, '')
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-    // Match sentences ending in punctuation
-    const sentenceRegex = /[^.!?]+[.!?]+(\s|$)/g;
-    const matches = clean.match(sentenceRegex);
-
-    if (matches && matches.length > 0) {
-      clean = matches.slice(0, maxSentences).join('').trim();
-    } else {
-      // Fallback if no terminating punctuation found
-      const parts = clean.split(/[.!?]/).filter(Boolean);
-      clean = parts.slice(0, maxSentences).join('. ').trim();
-      if (clean && !clean.endsWith('.')) {
-        clean += '.';
-      }
-    }
-
-    return clean;
+  cleanAndTruncateComment(rawText: string, mode: CoachMode): string {
+    return enforceLengthCaps(rawText, mode);
   },
 
   /**
@@ -272,16 +252,16 @@ export const coachCommentaryService = {
     let modeGuidance = '';
     switch (mode) {
       case 'learning':
-        modeGuidance = `1) State how good ${facts.moveSan} was (${facts.classification}). 2) If not best move, explain why ${revealMoveNames ? facts.bestMoveSan : 'the alternative idea'} was stronger. 3) Suggest what to focus on next (${facts.bestNextMoveSan ? `e.g. ${facts.bestNextMoveSan}` : 'key plan'}). Max ${maxSentences} short sentences.`;
+        modeGuidance = `Verdict (${facts.classification}) plus one short idea. Max 2 sentences and 30 words.`;
         break;
       case 'criticizing':
-        modeGuidance = `1) State quality of ${facts.moveSan} directly. 2) State what was missed (${revealMoveNames ? facts.bestMoveSan : 'the key tactical idea'}). 3) Give a 1-phrase next action plan. Max ${maxSentences} sentences, direct tone.`;
+        modeGuidance = `Direct tone, max 25 words. Name better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'key tactic'}) if one exists.`;
         break;
       case 'simple':
-        modeGuidance = `Use 1 plain sentence summarizing the move quality and next idea. No jargon.`;
+        modeGuidance = `Ultra short plain comment, max 12 words. Example: "Good move, you developed a knight."`;
         break;
       case 'competitive':
-        modeGuidance = `2 terse sentences stating move quality, eval shift, and key threat or next response.`;
+        modeGuidance = `Terse evaluation-based comment, max 15 words.`;
         break;
     }
 
@@ -316,7 +296,7 @@ Task: ${modeGuidance}`;
         maxSentences
       );
 
-      const cleaned = this.cleanAndTruncateComment(rawResponse, maxSentences);
+      const cleaned = this.cleanAndTruncateComment(rawResponse, mode);
       const finalComment = cleaned || this.getFallbackComment(facts, mode);
 
       // Cache successful response
@@ -380,15 +360,21 @@ Task: ${modeGuidance}`;
   ): Promise<MoveFacts> {
     const playedUci = `${move.from}${move.to}${move.promotion || ''}`.toLowerCase();
 
-    // 1. Evaluate position before the move
+    // 1. Evaluate position before the move (using precalculated result if available)
     let evalBefore = 0;
     let bestMoveUci = '';
-    try {
-      const beforeRes = await engineService.evaluate(previousFen, 250);
-      evalBefore = beforeRes.score;
-      bestMoveUci = beforeRes.bestMove || '';
-    } catch (e) {
-      console.warn('Evaluation before move failed:', e);
+    const precomputed = precomputeCache.get(previousFen);
+    if (precomputed) {
+      evalBefore = precomputed.score;
+      bestMoveUci = precomputed.bestMoveUci;
+    } else {
+      try {
+        const beforeRes = await engineService.evaluate(previousFen, 250);
+        evalBefore = beforeRes.score;
+        bestMoveUci = beforeRes.bestMove || '';
+      } catch (e) {
+        console.warn('Evaluation before move failed:', e);
+      }
     }
 
     // 2. Evaluate position after the move & get opponent's best reply

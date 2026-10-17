@@ -4,6 +4,7 @@ import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import { storageService } from '../../services/storageService';
 import { geminiService } from '../../services/geminiService';
+import { getMoveTimingLogs } from '../../services/coachCommentaryService';
 import { GEMINI_PREBUILT_VOICES } from '../../constants/aiModels';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
 import {
@@ -670,6 +671,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             {importStatus && <p className="text-xs text-amber-400">{importStatus}</p>}
+          </section>
+
+          {/* Timing Diagnostics Section (Requirement B.4) */}
+          <section className="space-y-3 border-t border-slate-800/80 pt-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+              <Activity className="w-4 h-4" />
+              <span>Coach Timing Diagnostics (Last 5 Moves)</span>
+            </div>
+
+            <div className="bg-slate-950/60 rounded-xl border border-slate-800 p-3 text-xs space-y-2">
+              {getMoveTimingLogs().length === 0 ? (
+                <p className="text-slate-400 text-xs italic">No moves recorded yet in this session. Play a move in a game to see Stockfish, Gemini text generation, and streaming audio latencies.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left font-mono text-[11px]">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="pb-1.5 font-medium">Move</th>
+                        <th className="pb-1.5 font-medium">Engine</th>
+                        <th className="pb-1.5 font-medium">Text Gen</th>
+                        <th className="pb-1.5 font-medium">First Audio</th>
+                        <th className="pb-1.5 font-medium">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {getMoveTimingLogs().map((entry, idx) => (
+                        <tr key={idx} className="text-slate-200">
+                          <td className="py-1.5 font-semibold text-amber-300">
+                            {entry.moveSan} <span className="text-[10px] text-slate-400">({entry.mover})</span>
+                          </td>
+                          <td className="py-1.5 text-emerald-400">{entry.engineMs} ms</td>
+                          <td className="py-1.5 text-sky-400">{entry.textGenMs} ms</td>
+                          <td className="py-1.5 text-indigo-400">{entry.timeToFirstAudioMs ? `${entry.timeToFirstAudioMs} ms` : '-'}</td>
+                          <td className="py-1.5 font-bold text-amber-400">{entry.totalMs} ms</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </section>
 
           {/* Expandable Audio Diagnostics */}

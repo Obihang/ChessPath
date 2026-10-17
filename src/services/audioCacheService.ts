@@ -107,4 +107,32 @@ export const audioCacheService = {
       // Ignored
     }
   },
+
+  /**
+   * Pre-generates and caches in IndexedDB short TTS clips for verdict phrases
+   * ("Great move.", "Good move.", "Inaccuracy.", "Mistake.", "Blunder.") for the selected voice.
+   * Runs in background with rate-limiting between calls.
+   */
+  async pregenerateVerdictPhrases(
+    voice: string,
+    generateFn: (text: string) => Promise<{ success: boolean; audioBuffer?: ArrayBuffer }>
+  ): Promise<void> {
+    const phrases = ['Great move.', 'Good move.', 'Inaccuracy.', 'Mistake.', 'Blunder.'];
+    for (const phrase of phrases) {
+      try {
+        const existing = await this.getClip(phrase, voice);
+        if (!existing) {
+          const res = await generateFn(phrase);
+          if (res.success && res.audioBuffer) {
+            await this.saveClip(phrase, voice, res.audioBuffer);
+          }
+          // Rate limit background pre-generation (600 ms pause)
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      } catch (err) {
+        console.warn('Verdict pregeneration step error:', err);
+      }
+    }
+  },
 };
+

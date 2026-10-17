@@ -3,6 +3,8 @@
  * Completely offline with zero external audio assets.
  */
 
+import { processPcmToFloat32 } from '../utils/audioUtils';
+
 export function ensureWavBuffer(buffer: ArrayBuffer, sampleRate: number = 24000): ArrayBuffer {
   const bytes = new Uint8Array(buffer);
   if (bytes.length >= 12) {
@@ -57,7 +59,8 @@ class SoundService {
   private ctx: AudioContext | null = null;
   private enabled: boolean = true;
 
-  private activeSourceNode: AudioBufferSourceNode | null = null;
+  private activeGainNode: GainNode | null = null;
+  private activeSources: AudioBufferSourceNode[] = [];
 
   constructor() {
     // AudioContext will be initialized on first user interaction
@@ -124,6 +127,118 @@ class SoundService {
 
   /**
    * Directly plays decoded PCM or WAV Audio ArrayBuffer through Web Audio API
+  /**
+   * Never stop speech audio abruptly.
+   * Ramps gain to 0 over 40 ms, then stops active sources.
+   */
+  public stopActiveSpeech(fadeMs: number = 40) {
+    if (this.activeGainNode && this.ctx) {
+      try {
+        const now = this.ctx.currentTime;
+        const fadeSec = fadeMs / 1000;
+        this.activeGainNode.gain.cancelScheduledValues(now);
+        this.activeGainNode.gain.setValueAtTime(this.activeGainNode.gain.value, now);
+        this.activeGainNode.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+
+        const sourcesToStop = [...this.activeSources];
+        this.activeSources = [];
+        const gainToDisconnect = this.activeGainNode;
+        this.activeGainNode = null;
+
+        setTimeout(() => {
+          sourcesToStop.forEach((src) => {
+            try {
+              src.stop();
+              src.disconnect();
+            } catch {
+              // Ignored
+            }
+          });
+          try {
+            gainToDisconnect.disconnect();
+          } catch {
+            // Ignored
+          }
+        }, fadeMs + 10);
+      } catch {
+        this.activeSources = [];
+        this.activeGainNode = null;
+      }
+    } else {
+      this.activeSources = [];
+      this.activeGainNode = null;
+    }
+  }
+
+  /**
+   * Creates a Web Audio session for streaming raw PCM audio chunks.
+   * Schedules chunks sequentially for low latency playback.
+   */
+  public createPcmStreamSession(volume: number = 1.0, playbackRate: number = 1.0) {
+    const ctx = this.initCtx();
+    if (!ctx) {
+      return {
+        pushChunk: () => 0,
+        stop: () => {},
+        getFirstAudioTime: () => 0,
+      };
+    }
+
+    this.stopActiveSpeech(40); // Smooth stop any active speech first
+
+    const sessionGain = ctx.createGain();
+    const targetVol = Math.max(0, Math.min(1, volume));
+    sessionGain.gain.setValueAtTime(targetVol, ctx.currentTime);
+    sessionGain.connect(ctx.destination);
+
+    this.activeGainNode = sessionGain;
+    let nextScheduledTime = ctx.currentTime + 0.05; // 50ms initial buffer
+    let firstAudioTimeMs = 0;
+    let chunkIndex = 0;
+
+    return {
+      pushChunk: (pcmBuffer: ArrayBuffer) => {
+        if (!ctx) return 0;
+        chunkIndex++;
+        const isFirst = chunkIndex === 1;
+
+        const float32 = processPcmToFloat32(pcmBuffer, {
+          sampleRate: 24000,
+          isFirstChunk: isFirst,
+          isLastChunk: false,
+        });
+
+        if (float32.length === 0) return 0;
+
+        const audioBuf = ctx.createBuffer(1, float32.length, 24000);
+        audioBuf.getChannelData(0).set(float32);
+
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuf;
+        src.playbackRate.value = Math.max(0.5, Math.min(2.0, playbackRate));
+        src.connect(sessionGain);
+
+        const startTime = Math.max(ctx.currentTime, nextScheduledTime);
+        src.start(startTime);
+        nextScheduledTime = startTime + audioBuf.duration / src.playbackRate.value;
+
+        this.activeSources.push(src);
+
+        if (isFirst) {
+          firstAudioTimeMs = Date.now();
+        }
+
+        return startTime;
+      },
+      getFirstAudioTime: () => firstAudioTimeMs,
+      stop: () => {
+        this.stopActiveSpeech(40);
+      },
+    };
+  }
+
+  /**
+   * Directly plays decoded PCM or WAV Audio ArrayBuffer through Web Audio API
    * or HTML5 Audio fallback.
    */
   public async playAudioArrayBuffer(
@@ -135,7 +250,7 @@ class SoundService {
     const validWav = ensureWavBuffer(buffer);
     const ctx = this.initCtx();
 
-    this.stopActiveSpeech();
+    this.stopActiveSpeech(40);
 
     // Strategy 1: Web Audio decodeAudioData
     if (ctx) {
@@ -154,16 +269,19 @@ class SoundService {
         source.connect(gain);
         gain.connect(ctx.destination);
 
+        this.activeGainNode = gain;
+        this.activeSources.push(source);
+
         return new Promise<boolean>((resolve) => {
           source.onended = () => {
-            if (this.activeSourceNode === source) {
-              this.activeSourceNode = null;
+            const idx = this.activeSources.indexOf(source);
+            if (idx !== -1) {
+              this.activeSources.splice(idx, 1);
             }
             onEnded?.();
             resolve(true);
           };
 
-          this.activeSourceNode = source;
           source.start(0);
         });
       } catch (e) {
@@ -193,17 +311,6 @@ class SoundService {
       });
     } catch {
       return false;
-    }
-  }
-
-  public stopActiveSpeech() {
-    if (this.activeSourceNode) {
-      try {
-        this.activeSourceNode.stop();
-      } catch {
-        // Ignored if already ended
-      }
-      this.activeSourceNode = null;
     }
   }
 

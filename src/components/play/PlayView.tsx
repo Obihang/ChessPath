@@ -78,6 +78,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
     commentFacts,
     isMuted: isCoachMuted,
     isAnalyzing: isCoachAnalyzing,
+    precomputeTurn,
     processMove: processCoachMove,
     toggleMute: toggleCoachMute,
     dismissComment: dismissCoachComment,
@@ -112,6 +113,17 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [customArrow, setCustomArrow] = useState<{ from: string; to: string; color?: string } | null>(null);
   const [isPlayRecording, setIsPlayRecording] = useState(false);
   const [isPlayTranscribing, setIsPlayTranscribing] = useState(false);
+
+  // Pre-generate verdict audio clips & precompute player turns
+  useEffect(() => {
+    speechService.pregenerateVerdictPhrases(settings).catch(() => {});
+  }, [settings.geminiVoice, settings.voiceEnabled]);
+
+  useEffect(() => {
+    if (game && !gameResult && game.turn() === playerColor) {
+      precomputeTurn(game.fen());
+    }
+  }, [game, gameResult, playerColor, precomputeTurn]);
 
   // Clocks
   const [whiteTime, setWhiteTime] = useState<number>(0);
@@ -364,7 +376,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
         checkTermination(currGame);
 
         // Process live coach commentary for opponent move
-        speechService.stop('Opponent move executed');
         const currentSanList = [...moves.map((m) => m.san), move.san];
         processCoachMove(moveRec, prevFen, currGame.fen(), false, currentSanList);
       }
@@ -398,7 +409,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
       setMoves((prev) => [...prev, userMoveRec]);
 
       // Process live coach commentary for player move
-      speechService.stop('Player move executed');
       setCustomArrow(null);
       const currentSanList = [...moves.map((m) => m.san), lastHist.san];
       processCoachMove(userMoveRec, prevFen, game.fen(), true, currentSanList);

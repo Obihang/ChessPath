@@ -134,7 +134,7 @@ export function validateAllContent() {
   return summary;
 }
 
-import { pcmToWav, stripMarkdown, classifyMoveThresholds } from './audioUtils';
+import { pcmToWav, stripMarkdown, classifyMoveThresholds, testPcmProcessingPipeline, enforceLengthCaps } from './audioUtils';
 
 export function validateAudioUtils() {
   console.log('--- Testing Audio & Chess Utilities ---');
@@ -160,13 +160,28 @@ export function validateAudioUtils() {
   }
   console.log(`✓ stripMarkdown test passed: "${cleanStr}"`);
 
-  // Test 3: classifyMoveThresholds
+  // Test 3: enforceLengthCaps
+  const longSimple = 'Good move. You developed your knight to the central square and controlled e5 and d4 effectively.';
+  const cappedSimple = enforceLengthCaps(longSimple, 'simple');
+  if (cappedSimple.split(/\s+/).length > 12) {
+    throw new Error(`enforceLengthCaps simple mode test failed: expected <= 12 words, got ${cappedSimple.split(/\s+/).length}`);
+  }
+  console.log(`✓ enforceLengthCaps simple test passed: "${cappedSimple}"`);
+
+  // Test 4: classifyMoveThresholds
   if (classifyMoveThresholds(0, true) !== 'great') throw new Error('classifyMoveThresholds test failed for best move');
   if (classifyMoveThresholds(30, false) !== 'good') throw new Error('classifyMoveThresholds test failed for 30 cp loss');
   if (classifyMoveThresholds(60, false) !== 'inaccuracy') throw new Error('classifyMoveThresholds test failed for 60 cp loss');
   if (classifyMoveThresholds(150, false) !== 'mistake') throw new Error('classifyMoveThresholds test failed for 150 cp loss');
   if (classifyMoveThresholds(300, false) !== 'blunder') throw new Error('classifyMoveThresholds test failed for 300 cp loss');
   console.log('✓ classifyMoveThresholds test passed (all centipawn thresholds verified)');
+
+  // Test 5: Synthetic PCM processing pipeline test (Requirements C.1, C.2, C.3)
+  const pcmPipelineRes = testPcmProcessingPipeline();
+  if (!pcmPipelineRes.success) {
+    throw new Error(`PCM Processing Pipeline Test Failed: ${pcmPipelineRes.message}`);
+  }
+  console.log(`✓ ${pcmPipelineRes.message}`);
 
   console.log('----------------------------------------');
 }

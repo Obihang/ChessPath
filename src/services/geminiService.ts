@@ -340,8 +340,9 @@ Keep the tone encouraging, constructive, and inspiring!`;
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           systemInstruction,
-          maxOutputTokens: 120,
+          maxOutputTokens: 60,
           temperature: 0.7,
+          thinkingConfig: { thinkingLevel: 'LOW' as any },
         },
       });
       return response.text || '';
@@ -358,13 +359,73 @@ Keep the tone encouraging, constructive, and inspiring!`;
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
             systemInstruction,
-            maxOutputTokens: 120,
+            maxOutputTokens: 60,
             temperature: 0.7,
+            thinkingConfig: { thinkingLevel: 'LOW' as any },
           },
         });
         return fallbackRes.text || '';
       }
       throw e;
+    }
+  },
+
+  async generateNaturalVoiceStream(
+    text: string,
+    onChunk: (pcmBuffer: ArrayBuffer) => void,
+    customKey?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const settings = storageService.getSettings();
+    const voiceName = settings.geminiVoice || 'Kore';
+    const cleanText = stripMarkdown(text).slice(0, 500);
+
+    if (!cleanText) {
+      return { success: false, error: 'Empty text' };
+    }
+
+    const ai = getGeminiClient(customKey || settings.geminiApiKey);
+    if (!ai) {
+      return { success: false, error: 'NO_KEY' };
+    }
+
+    const requestBody = {
+      contents: [{ role: 'user', parts: [{ text: cleanText }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName },
+          },
+        },
+      },
+    };
+
+    try {
+      const responseStream = await ai.models.generateContentStream({
+        model: GEMINI_MODELS.TTS_PRIMARY,
+        ...requestBody,
+      });
+
+      let receivedAny = false;
+      for await (const chunk of responseStream) {
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const p of parts) {
+          if (p.inlineData?.data) {
+            receivedAny = true;
+            const pcmBuffer = base64ToArrayBuffer(p.inlineData.data);
+            onChunk(pcmBuffer);
+          }
+        }
+      }
+
+      if (!receivedAny) {
+        return { success: false, error: 'No audio chunks' };
+      }
+
+      return { success: true };
+    } catch (e: any) {
+      console.warn('Streaming TTS failed, fallback available:', e);
+      return { success: false, error: e?.message || 'Streaming failed' };
     }
   },
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react';
 import { AppSettings, MoveRecord, PieceColor } from '../types/chess';
-import { coachCommentaryService, MoveFacts, CommentaryResult } from '../services/coachCommentaryService';
+import { coachCommentaryService, MoveFacts, CommentaryResult, recordMoveTiming } from '../services/coachCommentaryService';
 import { speechService } from '../services/speechService';
 
 export interface UseLiveCoachOptions {
@@ -15,14 +15,22 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
-  // Track sequence ID to drop stale asynchronous analyses
-  const analysisSeqRef = useRef<number>(0);
+  // Per-move sequence tracking keyed by player moves
+  const playerMoveSeqRef = useRef<number>(0);
   const lastPhaseRef = useRef<'opening' | 'middlegame' | 'endgame'>('opening');
 
   /**
+   * Trigger pre-computation of Stockfish engine facts while player is thinking
+   */
+  const precomputeTurn = useCallback((currentFen: string) => {
+    if (settings.liveCoachEnabled) {
+      coachCommentaryService.precomputePlayerTurn(currentFen).catch(() => {});
+    }
+  }, [settings.liveCoachEnabled]);
+
+  /**
    * Process a live move executed during gameplay.
-   * Only called for moves actively played in the game, never initial position,
-   * never loaded games, and never when liveCoach is disabled.
+   * Gives instant verdict badge & audio phrase, followed by streaming AI explanation.
    */
   const processMove = useCallback(
     async (
@@ -32,21 +40,28 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       isPlayerMove: boolean,
       recentMovesSan: string[] = []
     ) => {
-      // 1. Guard: Check if live coach is enabled
       if (!settings.liveCoachEnabled) {
         return;
       }
 
-      // 2. Guard: Must have distinct valid positions
       if (!previousFen || !currentFen || previousFen === currentFen) {
         return;
       }
 
-      const currentSeq = ++analysisSeqRef.current;
+      const moveStartTime = Date.now();
+
+      // Only player moves increment the player move sequence
+      let currentSeq = playerMoveSeqRef.current;
+      if (isPlayerMove) {
+        currentSeq = ++playerMoveSeqRef.current;
+        // Stop previous speech smoothly ONLY when player makes their next move
+        speechService.stop('Player executed next move');
+      }
+
       setIsAnalyzing(true);
 
       try {
-        // 3. Compute engine facts with Stockfish (eval before and after, cp loss, classification)
+        // 1. Engine calculation (uses precomputed evaluation if present: ~0 to 250 ms)
         const facts = await coachCommentaryService.computeMoveFacts(
           previousFen,
           currentFen,
@@ -55,14 +70,23 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           lastPhaseRef.current
         );
 
+        const engineMs = Date.now() - moveStartTime;
         lastPhaseRef.current = facts.gamePhase;
 
-        // If another move arrived while Stockfish was analyzing, drop this stale result
-        if (currentSeq !== analysisSeqRef.current) {
+        // If player made another move while computing, drop stale result
+        if (isPlayerMove && currentSeq !== playerMoveSeqRef.current) {
           return;
         }
 
-        // 4. Check mode condition (hard limit: if false, do not call Gemini at all)
+        // 2. Instant Verdict Badge display (Best, Good, Inaccuracy, Mistake, Blunder + Better Move SAN)
+        setCommentFacts(facts);
+
+        // 3. Instant Spoken Verdict from IndexedDB cache (0 network delay)
+        if (settings.voiceEnabled && !isMuted && isPlayerMove) {
+          speechService.speakVerdictInstant(facts.classification, settings).catch(() => {});
+        }
+
+        // Check if this mode should generate commentary
         const shouldComment = coachCommentaryService.shouldModeComment(
           settings.coachMode,
           facts,
@@ -74,16 +98,17 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           return;
         }
 
-        // 5. Generate commentary (Gemini or fallback template)
+        // 4. Generate AI Commentary
+        const textGenStart = Date.now();
         const commentaryResult = await coachCommentaryService.generateCommentary(
           facts,
           recentMovesSan,
           settings.coachMode,
           isPlayerMove
         );
+        const textGenMs = Date.now() - textGenStart;
 
-        // If another move arrived while Gemini was generating, drop this stale result
-        if (currentSeq !== analysisSeqRef.current) {
+        if (isPlayerMove && currentSeq !== playerMoveSeqRef.current) {
           return;
         }
 
@@ -92,19 +117,34 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           setCommentFacts(commentaryResult.facts);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 6. Speak commentary if voice is enabled and not muted
+          // 5. Streaming TTS AI Explanation
+          let firstAudioMs = 0;
           if (settings.voiceEnabled && !isMuted) {
-            speechService.speakWithCoach(commentaryResult.comment, settings, {
-              onError: (err) => {
-                console.warn('Live coach speech error:', err);
+            const speechRes = await speechService.speakWithCoachStream(commentaryResult.comment, settings, {
+              onFirstAudio: (timeToFirst) => {
+                firstAudioMs = timeToFirst;
               },
             });
+            if (!firstAudioMs) {
+              firstAudioMs = speechRes.timeToFirstAudioMs;
+            }
           }
+
+          const totalMs = Date.now() - moveStartTime;
+          recordMoveTiming({
+            moveSan: move.san,
+            mover: isPlayerMove ? 'player' : 'opponent',
+            engineMs,
+            textGenMs,
+            timeToFirstAudioMs: firstAudioMs,
+            totalMs,
+            timestamp: new Date().toLocaleTimeString(),
+          });
         }
       } catch (err) {
-        console.warn('useLiveCoach error:', err);
+        console.warn('useLiveCoach processMove error:', err);
       } finally {
-        if (currentSeq === analysisSeqRef.current) {
+        if (!isPlayerMove || currentSeq === playerMoveSeqRef.current) {
           setIsAnalyzing(false);
         }
       }
@@ -129,12 +169,12 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   const repeatComment = useCallback(() => {
     if (latestComment && settings.voiceEnabled) {
-      speechService.speakWithCoach(latestComment, settings);
+      speechService.speakWithCoachStream(latestComment, settings);
     }
   }, [latestComment, settings]);
 
   const resetCoach = useCallback(() => {
-    analysisSeqRef.current++;
+    playerMoveSeqRef.current++;
     setIsAnalyzing(false);
     setLatestComment(null);
     setCommentFacts(null);
@@ -146,6 +186,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     commentFacts,
     isMuted,
     isAnalyzing,
+    precomputeTurn,
     processMove,
     toggleMute,
     dismissComment,
