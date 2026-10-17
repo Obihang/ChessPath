@@ -145,17 +145,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else if (provider === 'bytez') {
       defaultBaseUrl = 'https://api.bytez.com/v1';
       defaultModel = 'Qwen/Qwen2.5-72B-Instruct';
+    } else if (provider === 'custom') {
+      defaultBaseUrl = 'https://api.openai.com/v1';
+      defaultModel = 'gpt-3.5-turbo';
     }
 
     const updated: AppSettings = {
       ...localSettings,
       aiProvider: provider,
-      aiBaseUrl: localSettings.aiBaseUrl || defaultBaseUrl,
-      aiModelName: localSettings.aiModelName || defaultModel,
+      aiBaseUrl: defaultBaseUrl,
+      aiModelName: defaultModel,
     };
     setLocalSettings(updated);
     storageService.saveSettings(updated);
     onUpdateSettings(updated);
+    setVoiceTestStatus(null);
   };
 
   const handleApiKeyChange = (newKey: string) => {
@@ -928,30 +932,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <span>API Key saved locally & ready</span>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
-                        onClick={handleTestGeminiVoice}
-                        disabled={isTestingVoice && testingType !== 'gemini'}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                        onClick={async () => {
+                          setIsTestingChat(true);
+                          const provName = localSettings.aiProvider || 'Gemini';
+                          setVoiceTestStatus({ type: 'info', message: `Testing connection to ${provName}...` });
+                          try {
+                            const res = await geminiService.testProviderConnection({
+                              provider: localSettings.aiProvider,
+                              apiKey: localSettings.aiApiKey || localSettings.geminiApiKey,
+                              baseUrl: localSettings.aiBaseUrl,
+                              modelName: localSettings.aiModelName,
+                            });
+                            if (res.success) {
+                              setVoiceTestStatus({ type: 'success', message: `✓ ${provName} Connected! Reply: "${res.reply}"` });
+                            } else {
+                              setVoiceTestStatus({ type: 'error', message: res.error || 'Connection failed.' });
+                            }
+                          } catch (e: any) {
+                            setVoiceTestStatus({ type: 'error', message: e?.message || 'Connection error.' });
+                          } finally {
+                            setIsTestingChat(false);
+                          }
+                        }}
+                        disabled={isTestingChat}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold transition-colors"
                       >
-                        {isTestingVoice && testingType === 'gemini' ? (
-                          <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Connecting...</span>
-                          </>
-                        ) : isSpeaking && testingType === 'gemini' ? (
-                          <>
-                            <VolumeX className="w-3.5 h-3.5" />
-                            <span>Stop Voice</span>
-                          </>
+                        {isTestingChat ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         ) : (
-                          <>
-                            <Sparkles className="w-3.5 h-3.5" />
-                            <span>Test Voice with Key</span>
-                          </>
+                          <Sparkles className="w-3.5 h-3.5" />
                         )}
+                        <span>Test AI ({localSettings.aiProvider || 'Gemini'})</span>
                       </button>
+
+                      {(!localSettings.aiProvider || localSettings.aiProvider === 'gemini') && (
+                        <button
+                          type="button"
+                          onClick={handleTestGeminiVoice}
+                          disabled={isTestingVoice && testingType !== 'gemini'}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold transition-colors"
+                        >
+                          {isTestingVoice && testingType === 'gemini' ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : isSpeaking && testingType === 'gemini' ? (
+                            <VolumeX className="w-3.5 h-3.5" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" />
+                          )}
+                          <span>Test Voice</span>
+                        </button>
+                      )}
 
                       <button
                         type="button"
@@ -959,7 +992,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium border border-slate-700 transition-colors"
                       >
                         <Volume2 className="w-3.5 h-3.5" />
-                        <span>Test Offline</span>
+                        <span>Test Offline Voice</span>
                       </button>
                     </div>
                   </div>

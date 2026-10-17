@@ -196,15 +196,26 @@ Strict instructions:
       const msg = e?.message || '';
 
       if (msg === 'NO_KEY') {
-        errorMessage = 'No Gemini API key set. Please paste your free key in Settings to chat with the coach.';
+        let engineSuggestion = '';
+        try {
+          const evalInfo = await engineService.evaluate(currentFen, 400);
+          if (evalInfo && evalInfo.bestMove) {
+            engineSuggestion = `Stockfish 19 Analysis: Recommended move is ${evalInfo.bestMove} (eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp).\n\n💡 Tip: Paste your API key (Groq, OpenRouter, Bytez, or Gemini) in Settings for conversational AI chat!`;
+          } else {
+            engineSuggestion = 'No API key set. Paste your Groq, OpenRouter, Bytez, or Gemini API key in Settings to unlock conversational AI chat!';
+          }
+        } catch {
+          engineSuggestion = 'No API key set. Paste your Groq, OpenRouter, Bytez, or Gemini API key in Settings for conversational AI chat!';
+        }
+        errorMessage = engineSuggestion;
       } else if (msg.includes('401') || msg.includes('403') || msg.includes('API_KEY_INVALID')) {
-        errorMessage = 'Invalid Gemini API key (401/403). Please verify your API key in Settings.';
+        errorMessage = `Invalid API key for ${settings.aiProvider || 'AI Provider'} (401/403). Please verify your key in Settings.`;
       } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-        errorMessage = 'Gemini quota or rate limit reached (429). Please wait about a minute and try again.';
+        errorMessage = `Quota or rate limit reached on ${settings.aiProvider || 'AI Provider'} (429). Please wait about a minute and try again.`;
       } else if (msg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
         errorMessage = 'You appear to be offline or network connection was lost.';
       } else if (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound')) {
-        errorMessage = 'Gemini model error. Please check your model configuration or project permissions.';
+        errorMessage = `Model or endpoint not found on ${settings.aiProvider || 'AI Provider'}. Check Base URL and Model Name in Settings.`;
       } else {
         errorMessage = `Coach service error: ${msg}`;
       }

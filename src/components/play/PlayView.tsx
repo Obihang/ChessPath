@@ -19,8 +19,10 @@ import { CapturedPieces } from '../board/CapturedPieces';
 import { MoveHistory } from '../board/MoveHistory';
 import { engineService, ENGINE_DIFFICULTIES } from '../../services/engineService';
 import { soundService } from '../../services/audioService';
+import { speechService } from '../../services/speechService';
 import { storageService } from '../../services/storageService';
 import { useLiveCoach } from '../../hooks/useLiveCoach';
+import { geminiService } from '../../services/geminiService';
 import {
   RotateCcw,
   Undo2,
@@ -36,6 +38,7 @@ import {
   Check,
   Sparkles,
   Loader2,
+  Lightbulb,
 } from 'lucide-react';
 
 interface PlayViewProps {
@@ -78,6 +81,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
     dismissComment: dismissCoachComment,
     repeatComment: repeatCoachComment,
     resetCoach: resetLiveCoach,
+    setLatestComment,
   } = useLiveCoach({
     settings,
     playerColor,
@@ -366,6 +370,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
   // Handle User Move on Board
   const handleUserMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
+    speechService.unlock();
     setLastMove({ from: moveData.from, to: moveData.to });
 
     const prevFen =
@@ -412,6 +417,43 @@ export const PlayView: React.FC<PlayViewProps> = ({
     // Trigger AI move if in AI mode and it's AI's turn
     if (mode === 'ai' && !ended && game.turn() !== playerColor) {
       triggerAiMove(game);
+    }
+  };
+
+  // On-demand Coach Hint / Suggestion
+  const [isRequestingSuggestion, setIsRequestingSuggestion] = useState(false);
+
+  const handleRequestCoachSuggestion = async () => {
+    speechService.unlock();
+    if (gameResult || isAiThinking || isRequestingSuggestion) return;
+
+    setIsRequestingSuggestion(true);
+    try {
+      const currentFen = game.fen();
+      const side = game.turn() === 'w' ? 'White' : 'Black';
+      const evalInfo = await engineService.evaluate(currentFen, 400);
+
+      let hintText = '';
+      if (geminiService.hasKey()) {
+        hintText = await geminiService.getHint(
+          currentFen,
+          `Provide an encouraging strategic hint and idea for ${side} in this position`,
+          side
+        );
+      } else if (evalInfo && evalInfo.bestMove) {
+        hintText = `Stockfish 19 Recommendation: Best move is ${evalInfo.bestMove} (eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp). Focus on controlling the center and active piece placement!`;
+      } else {
+        hintText = 'Focus on piece activity: look for undefended pieces, forced checks, and double attacks!';
+      }
+
+      setLatestComment(hintText);
+      if (settings.voiceEnabled) {
+        speechService.speakWithCoach(hintText, settings);
+      }
+    } catch (e) {
+      console.warn('Coach hint error:', e);
+    } finally {
+      setIsRequestingSuggestion(false);
     }
   };
 
@@ -697,7 +739,21 @@ export const PlayView: React.FC<PlayViewProps> = ({
       </div>
 
       {/* Game Action Toolbar */}
-      <div className="flex items-center justify-center gap-2 w-full max-w-[520px] pt-1 pb-4">
+      <div className="flex items-center justify-center gap-1.5 flex-wrap w-full max-w-[520px] pt-1 pb-4">
+        <button
+          onClick={handleRequestCoachSuggestion}
+          disabled={!!gameResult || isAiThinking || isRequestingSuggestion}
+          className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-semibold transition-colors disabled:opacity-40 shrink-0"
+          title="Ask AI Coach for a move suggestion"
+        >
+          {isRequestingSuggestion ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+          ) : (
+            <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
+          )}
+          <span>Coach Hint</span>
+        </button>
+
         <button
           onClick={() => setBoardOrientation((prev) => (prev === 'w' ? 'b' : 'w'))}
           className="flex items-center gap-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-medium border border-slate-800 transition-colors"

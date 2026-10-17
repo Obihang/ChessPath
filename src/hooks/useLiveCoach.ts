@@ -151,5 +151,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     dismissComment,
     repeatComment,
     resetCoach,
+    setLatestComment,
   };
 }
