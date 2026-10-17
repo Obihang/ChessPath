@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   coachMode: 'learning',
   revealBetterMoveNames: true,
   autoSendTranscribed: false,
+  streamingVoice: false,
 };
 
 export const storageService = {

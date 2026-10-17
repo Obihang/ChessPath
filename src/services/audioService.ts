@@ -3,7 +3,7 @@
  * Completely offline with zero external audio assets.
  */
 
-import { processPcmToFloat32 } from '../utils/audioUtils';
+import { processPcmToFloat32, processRawPcmOrWavToProcessedWav } from '../utils/audioUtils';
 
 export function ensureWavBuffer(buffer: ArrayBuffer, sampleRate: number = 24000): ArrayBuffer {
   const bytes = new Uint8Array(buffer);
@@ -247,7 +247,7 @@ class SoundService {
     onEnded?: () => void,
     playbackRate: number = 1.0
   ): Promise<boolean> {
-    const validWav = ensureWavBuffer(buffer);
+    const processedWav = processRawPcmOrWavToProcessedWav(buffer, 24000);
     const ctx = this.initCtx();
 
     this.stopActiveSpeech(40);
@@ -259,7 +259,7 @@ class SoundService {
           await ctx.resume().catch(() => {});
         }
 
-        const audioBuffer = await ctx.decodeAudioData(validWav.slice(0));
+        const audioBuffer = await ctx.decodeAudioData(processedWav.slice(0));
         const source = ctx.createBufferSource();
         const gain = ctx.createGain();
 
@@ -291,7 +291,7 @@ class SoundService {
 
     // Strategy 2: HTML5 Audio element fallback
     try {
-      const blob = new Blob([validWav], { type: 'audio/wav' });
+      const blob = new Blob([processedWav], { type: 'audio/wav' });
       const blobUrl = URL.createObjectURL(blob);
       const audio = new Audio(blobUrl);
       audio.volume = Math.max(0, Math.min(1, volume));

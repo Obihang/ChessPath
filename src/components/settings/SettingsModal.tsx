@@ -4,7 +4,7 @@ import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import { storageService } from '../../services/storageService';
 import { geminiService } from '../../services/geminiService';
-import { getMoveTimingLogs } from '../../services/coachCommentaryService';
+import { getMoveTimingLogs, coachCommentaryService } from '../../services/coachCommentaryService';
 import { GEMINI_PREBUILT_VOICES } from '../../constants/aiModels';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
 import {
@@ -55,6 +55,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [engineStatus, setEngineStatus] = useState<EngineStatusInfo>(() => engineService.getStatus());
   const [isTestingEngine, setIsTestingEngine] = useState(false);
   const [engineTestResult, setEngineTestResult] = useState<EngineTestResult | null>(null);
+  const [isTestingSampleMove, setIsTestingSampleMove] = useState(false);
+  const [sampleMoveResult, setSampleMoveResult] = useState<{
+    engineFacts?: string;
+    generatedText?: string;
+    bytesReceived?: number;
+    timeToFirstAudioMs?: number;
+    error?: string;
+  } | null>(null);
+
+  const handleTestCoachSampleMove = async () => {
+    setIsTestingSampleMove(true);
+    setSampleMoveResult(null);
+    try {
+      const fenBefore = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2';
+      const fenAfter = 'rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2';
+      const move = { from: 'g1', to: 'f3', san: 'Nf3', color: 'w' as const, piece: 'n' as const, fen: fenAfter };
+
+      const facts = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, move, 'w');
+      const commentary = await coachCommentaryService.generateCommentary(facts, ['e4', 'e5', 'Nf3'], localSettings.coachMode, true);
+
+      let ttsBytes = 0;
+      let timeToFirst = 0;
+      let errStr: string | undefined;
+
+      const tStart = Date.now();
+      const res = await geminiService.generateNaturalVoice(commentary?.comment || 'Good move.', localSettings.geminiApiKey);
+      if (res.success && res.audioBuffer) {
+        ttsBytes = res.audioBuffer.byteLength;
+        timeToFirst = Date.now() - tStart;
+        await soundService.playAudioArrayBuffer(res.audioBuffer, localSettings.voiceVolume, undefined, localSettings.voiceRate);
+      } else {
+        errStr = res.error || 'TTS failed';
+      }
+
+      setSampleMoveResult({
+        engineFacts: `Eval before: ${facts.evalBefore}, eval after: ${facts.evalAfter}, class: ${facts.classification}, bestMove: ${facts.bestMoveSan || 'N/A'}`,
+        generatedText: commentary?.comment || 'Good move.',
+        bytesReceived: ttsBytes,
+        timeToFirstAudioMs: timeToFirst,
+        error: errStr,
+      });
+    } catch (e: any) {
+      setSampleMoveResult({ error: e?.message || 'Sample test failed' });
+    } finally {
+      setIsTestingSampleMove(false);
+    }
+  };
 
   useEffect(() => {
     setLocalSettings(settings);
@@ -471,6 +518,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                   </div>
                   <div className="flex items-center justify-between">
+                    <span className="text-slate-300">Streaming voice (experimental)</span>
+                    <input
+                      type="checkbox"
+                      checked={localSettings.streamingVoice ?? false}
+                      onChange={(e) => handleChange('streamingVoice', e.target.checked)}
+                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-slate-300">Send automatically after transcribing</span>
                     <input
                       type="checkbox"
@@ -487,7 +543,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="button"
                     onClick={handleTestGeminiVoice}
                     disabled={isTestingVoice}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
                   >
                     {isTestingVoice ? (
                       <>
@@ -511,7 +567,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="button"
                     onClick={handleTestMicrophone}
                     disabled={isTestingMic}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
                   >
                     {isTestingMic ? (
                       <>
@@ -525,7 +581,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </>
                     )}
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleTestCoachSampleMove}
+                    disabled={isTestingSampleMove}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                  >
+                    {isTestingSampleMove ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Testing Coach...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Bot className="w-3.5 h-3.5" />
+                        <span>Test coach on sample move</span>
+                      </>
+                    )}
+                  </button>
                 </div>
+
+                {/* Sample Move Test Readout */}
+                {sampleMoveResult && (
+                  <div className="p-3 rounded-xl bg-slate-900 border border-indigo-500/30 text-xs space-y-1.5">
+                    <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                      <Bot className="w-4 h-4" />
+                      <span>Live Coach Sample Move Test Result:</span>
+                    </div>
+                    {sampleMoveResult.error ? (
+                      <div className="text-rose-400">Error: {sampleMoveResult.error}</div>
+                    ) : (
+                      <>
+                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Engine facts:</span> {sampleMoveResult.engineFacts}</div>
+                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Generated text:</span> "{sampleMoveResult.generatedText}"</div>
+                        <div className="text-slate-300"><span className="text-slate-400 font-medium">TTS bytes received:</span> {sampleMoveResult.bytesReceived} bytes</div>
+                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Time to first audio:</span> {sampleMoveResult.timeToFirstAudioMs} ms</div>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Test Result Toast */}
                 {voiceTestStatus && (

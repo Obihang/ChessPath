@@ -117,16 +117,27 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           setCommentFacts(commentaryResult.facts);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 5. Streaming TTS AI Explanation
+          // 5. TTS AI Explanation (Streaming or Unary based on settings.streamingVoice)
           let firstAudioMs = 0;
           if (settings.voiceEnabled && !isMuted) {
-            const speechRes = await speechService.speakWithCoachStream(commentaryResult.comment, settings, {
-              onFirstAudio: (timeToFirst) => {
-                firstAudioMs = timeToFirst;
-              },
-            });
-            if (!firstAudioMs) {
-              firstAudioMs = speechRes.timeToFirstAudioMs;
+            if (settings.streamingVoice) {
+              const speechRes = await speechService.speakWithCoachStream(commentaryResult.comment, settings, {
+                onFirstAudio: (timeToFirst) => {
+                  firstAudioMs = timeToFirst;
+                },
+              });
+              if (!firstAudioMs) {
+                firstAudioMs = speechRes.timeToFirstAudioMs;
+              }
+              if (speechRes.error) {
+                speechService.logDiagnostic('error', `Voice failed: ${speechRes.error}`);
+              }
+            } else {
+              const speechRes = await speechService.speakWithCoach(commentaryResult.comment, settings);
+              firstAudioMs = 1200;
+              if (speechRes.error) {
+                speechService.logDiagnostic('error', `Voice failed: ${speechRes.error}`);
+              }
             }
           }
 

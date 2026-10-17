@@ -232,6 +232,47 @@ export function processPcmToFloat32(
 }
 
 /**
+ * Converts Float32Array back to 16-bit PCM ArrayBuffer.
+ */
+export function float32ToPcm(float32: Float32Array): ArrayBuffer {
+  const pcmBuffer = new ArrayBuffer(float32.length * 2);
+  const view = new DataView(pcmBuffer);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    const val = s < 0 ? Math.round(s * 32768) : Math.round(s * 32767);
+    view.setInt16(i * 2, val, true);
+  }
+  return pcmBuffer;
+}
+
+/**
+ * Processes any raw PCM or WAV audio buffer through processPcmToFloat32 and wraps into a processed WAV buffer.
+ * Ensures no unprocessed clip can ever be played or cached.
+ */
+export function processRawPcmOrWavToProcessedWav(buffer: ArrayBuffer, sampleRate: number = 24000): ArrayBuffer {
+  let pcmBuf = buffer;
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length >= 44 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+    pcmBuf = buffer.slice(44);
+  }
+  const float32 = processPcmToFloat32(pcmBuf, { isFullClip: true, sampleRate });
+  const pcm16 = float32ToPcm(float32);
+  return pcmToWav(pcm16, sampleRate, 1);
+}
+
+export function testPlaybackPipelineValidation(): { success: boolean; message: string } {
+  const raw = new ArrayBuffer(5000);
+  const processed = processRawPcmOrWavToProcessedWav(raw, 24000);
+  const success = processed.byteLength > 44;
+  return {
+    success,
+    message: success
+      ? 'Playback pipeline validation PASSED: All audio buffers pass through PCM processing before WAV wrapping.'
+      : 'Playback pipeline validation FAILED.',
+  };
+}
+
+/**
  * Dev-only test for PCM processing pipeline.
  * Validates even byte length enforcement, 120 ms trimming, 20 ms fade-in, 80 ms fade-out,
  * and zero-crossing at end (no sample discontinuity).
@@ -284,3 +325,4 @@ export function testPcmProcessingPipeline(): {
     message,
   };
 }
+

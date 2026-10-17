@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { storageService } from './storageService';
 import { GEMINI_MODELS } from '../constants/aiModels';
-import { pcmToWav, base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
+import { pcmToWav, base64ToArrayBuffer, stripMarkdown, processRawPcmOrWavToProcessedWav, processPcmToFloat32, float32ToPcm } from '../utils/audioUtils';
 import { audioCacheService } from './audioCacheService';
 
 export { base64ToArrayBuffer };
@@ -407,15 +407,64 @@ Keep the tone encouraging, constructive, and inspiring!`;
       });
 
       let receivedAny = false;
+      let carryByte: number | null = null;
+      let accumulatedBytes: number[] = [];
+
       for await (const chunk of responseStream) {
         const parts = chunk.candidates?.[0]?.content?.parts || [];
         for (const p of parts) {
           if (p.inlineData?.data) {
             receivedAny = true;
-            const pcmBuffer = base64ToArrayBuffer(p.inlineData.data);
-            onChunk(pcmBuffer);
+            const chunkBuffer = base64ToArrayBuffer(p.inlineData.data);
+            const chunkBytes = new Uint8Array(chunkBuffer);
+
+            let combined: Uint8Array;
+            if (carryByte !== null) {
+              combined = new Uint8Array(chunkBytes.length + 1);
+              combined[0] = carryByte;
+              combined.set(chunkBytes, 1);
+              carryByte = null;
+            } else {
+              combined = chunkBytes;
+            }
+
+            let processLen = combined.length;
+            if (processLen % 2 !== 0) {
+              carryByte = combined[combined.length - 1];
+              processLen -= 1;
+            }
+
+            if (processLen > 0) {
+              const evenBytes = combined.subarray(0, processLen);
+              for (let i = 0; i < evenBytes.length; i++) {
+                accumulatedBytes.push(evenBytes[i]);
+              }
+            }
+
+            // Hold back final 120 ms (5760 bytes at 24kHz 16-bit mono)
+            const holdBackBytes = 5760;
+            if (accumulatedBytes.length > holdBackBytes) {
+              const sendLen = accumulatedBytes.length - holdBackBytes;
+              const sendBuf = new Uint8Array(sendLen);
+              for (let i = 0; i < sendLen; i++) {
+                sendBuf[i] = accumulatedBytes.shift()!;
+              }
+              onChunk(sendBuf.buffer);
+            }
           }
         }
+      }
+
+      if (accumulatedBytes.length > 0) {
+        const finalBuf = new Uint8Array(accumulatedBytes);
+        const float32Final = processPcmToFloat32(finalBuf.buffer, {
+          isFullClip: false,
+          isFirstChunk: false,
+          isLastChunk: true,
+          sampleRate: 24000,
+        });
+        const pcm16Final = float32ToPcm(float32Final);
+        onChunk(pcm16Final);
       }
 
       if (!receivedAny) {
@@ -424,7 +473,7 @@ Keep the tone encouraging, constructive, and inspiring!`;
 
       return { success: true };
     } catch (e: any) {
-      console.warn('Streaming TTS failed, fallback available:', e);
+      console.warn('Streaming TTS failed:', e);
       return { success: false, error: e?.message || 'Streaming failed' };
     }
   },
@@ -511,14 +560,13 @@ Keep the tone encouraging, constructive, and inspiring!`;
       }
 
       const pcmBuffer = base64ToArrayBuffer(rawBase64);
-      // Convert raw 24kHz 16-bit PCM to standard WAV with RIFF header
-      const wavBuffer = pcmToWav(pcmBuffer, 24000, 1);
-      const audioUrl = arrayBufferToBlobUrl(wavBuffer, 'audio/wav');
+      const processedWav = processRawPcmOrWavToProcessedWav(pcmBuffer, 24000);
+      const audioUrl = arrayBufferToBlobUrl(processedWav, 'audio/wav');
 
       // Cache clip in IndexedDB
-      await audioCacheService.saveClip(cleanText, voiceName, wavBuffer);
+      await audioCacheService.saveClip(cleanText, voiceName, processedWav);
 
-      return { success: true, audioUrl, audioBuffer: wavBuffer };
+      return { success: true, audioUrl, audioBuffer: processedWav };
     } catch (e: any) {
       console.warn('Gemini TTS error:', e);
       let errMsg = e?.message || 'Gemini TTS request failed.';
