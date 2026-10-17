@@ -90,7 +90,7 @@ class SoundService {
 
   /**
    * Plays a distinct 3-tone chime directly through Web Audio API.
-   * Useful for diagnosing physical device speaker output independently of SpeechSynthesis.
+   * Useful for diagnosing physical device speaker output independently of TTS speech output.
    */
   public async playDiagnosticBeep(): Promise<boolean> {
     const ctx = this.initCtx();
@@ -129,7 +129,8 @@ class SoundService {
   public async playAudioArrayBuffer(
     buffer: ArrayBuffer,
     volume: number = 1.0,
-    onEnded?: () => void
+    onEnded?: () => void,
+    playbackRate: number = 1.0
   ): Promise<boolean> {
     const validWav = ensureWavBuffer(buffer);
     const ctx = this.initCtx();
@@ -148,6 +149,7 @@ class SoundService {
         const gain = ctx.createGain();
 
         gain.gain.setValueAtTime(Math.max(0, Math.min(1, volume)), ctx.currentTime);
+        source.playbackRate.value = Math.max(0.5, Math.min(2.0, playbackRate));
         source.buffer = audioBuffer;
         source.connect(gain);
         gain.connect(ctx.destination);
@@ -175,6 +177,7 @@ class SoundService {
       const blobUrl = URL.createObjectURL(blob);
       const audio = new Audio(blobUrl);
       audio.volume = Math.max(0, Math.min(1, volume));
+      audio.playbackRate = Math.max(0.5, Math.min(2.0, playbackRate));
 
       return new Promise<boolean>((resolve) => {
         audio.onended = () => {

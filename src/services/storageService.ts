@@ -33,12 +33,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceEnabled: true,
   voiceRate: 1.0,
   voiceVolume: 1.0,
-  selectedVoiceURI: '',
-  useNaturalVoice: false,
+  geminiVoice: 'Kore',
+  useNaturalVoice: true,
   pieceSet: 'cburnett',
   pieceShadow: true,
   liveCoachEnabled: true,
   coachMode: 'learning',
+  revealBetterMoveNames: true,
+  autoSendTranscribed: false,
 };
 
 export const storageService = {

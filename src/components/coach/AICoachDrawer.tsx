@@ -20,6 +20,7 @@ import {
   User,
   Activity,
   Radio,
+  Loader2,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -58,7 +59,8 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [conversationMode, setConversationMode] = useState<CoachMode>(settings.coachMode || 'learning');
@@ -92,7 +94,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     return unsubscribe;
   }, []);
 
-  const recognitionRef = useRef<any>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -233,49 +235,62 @@ Strict instructions:
     }
   };
 
-  // Speech Recognition (Microphone)
-  const toggleSpeechRecognition = () => {
+  // MediaRecorder Gemini STT (Microphone)
+  const toggleRecording = async () => {
     speechService.unlock();
-    if (!speechService.isRecognitionAvailable()) return;
 
-    if (isListening) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
+    if (isRecording) {
+      setIsRecording(false);
+      setIsTranscribing(true);
+      try {
+        const audioBlob = await speechService.stopRecording();
+        if (audioBlob && audioBlob.size > 0) {
+          const res = await geminiService.transcribeAudio(
+            audioBlob,
+            audioBlob.type,
+            settings.geminiApiKey || settings.aiApiKey
+          );
+          if (res.success && res.transcript) {
+            setInputText(res.transcript);
+            if (settings.autoSendTranscribed) {
+              handleSendMessage(res.transcript);
+            }
+          } else if (res.error) {
+            const errMsg: ChatMessage = {
+              id: `err-${Date.now()}`,
+              sender: 'coach',
+              text: `STT error: ${res.error}`,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, errMsg]);
+          }
+        }
+      } catch (err: any) {
+        console.warn('STT transcription error:', err);
+      } finally {
+        setIsTranscribing(false);
       }
-      setIsListening(false);
       return;
     }
 
-    const SpeechRecognitionClass =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognitionClass) return;
-
     try {
-      const recognition = new SpeechRecognitionClass();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setInputText(transcript);
-        setIsListening(false);
+      await speechService.startRecording(30000);
+      setIsRecording(true);
+    } catch (err: any) {
+      setIsRecording(false);
+      let errMsg = 'Failed to start recording.';
+      if (err?.name === 'NotAllowedError' || err?.message?.includes('Permission denied')) {
+        errMsg = 'Microphone permission denied. Please allow microphone access in your browser/app settings.';
+      } else if (err?.name === 'NotFoundError') {
+        errMsg = 'No microphone device found on this system.';
+      }
+      const chatErr: ChatMessage = {
+        id: `err-${Date.now()}`,
+        sender: 'coach',
+        text: errMsg,
+        timestamp: new Date(),
       };
-
-      recognition.onerror = () => {
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-      setIsListening(true);
-    } catch {
-      setIsListening(false);
+      setMessages((prev) => [...prev, chatErr]);
     }
   };
 
@@ -512,20 +527,21 @@ Strict instructions:
               className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
             />
 
-            {speechService.isRecognitionAvailable() && (
-              <button
-                type="button"
-                onClick={toggleSpeechRecognition}
-                className={`p-2 rounded-xl border transition-colors ${
-                  isListening
-                    ? 'bg-red-500/20 border-red-500 text-red-400 animate-pulse'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
-                title={isListening ? 'Listening...' : 'Voice Input (Microphone)'}
-              >
-                {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={toggleRecording}
+              disabled={isTranscribing}
+              className={`p-2 rounded-xl border transition-colors ${
+                isRecording
+                  ? 'bg-red-500/20 border-red-500 text-red-400 animate-pulse'
+                  : isTranscribing
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+              title={isRecording ? 'Tap to stop recording' : isTranscribing ? 'Transcribing...' : 'Voice Input (Microphone)'}
+            >
+              {isTranscribing ? <Loader2 className="w-4 h-4 animate-spin" /> : isRecording ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+            </button>
 
             <button
               type="submit"

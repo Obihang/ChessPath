@@ -8,6 +8,9 @@ coverage/
 .env.*
 !.env.example
 android/build/
+android/app/src/main/assets/public
+android/.gradle
+android/local.properties
 *.keystore
 *.jks
 .aistudio/

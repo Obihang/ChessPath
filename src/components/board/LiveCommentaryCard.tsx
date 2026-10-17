@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw } from 'lucide-react';
+import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw, Navigation } from 'lucide-react';
 import { CoachMode } from '../../types/chess';
 import { MoveFacts } from '../../services/coachCommentaryService';
 
@@ -12,6 +12,8 @@ export interface LiveCommentaryCardProps {
   onOpenCoach?: () => void;
   onDismiss?: () => void;
   onRepeat?: () => void;
+  onShowBetterMove?: (from: string, to: string) => void;
+  isRateLimited?: boolean;
 }
 
 export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
@@ -23,6 +25,8 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   onOpenCoach,
   onDismiss,
   onRepeat,
+  onShowBetterMove,
+  isRateLimited = false,
 }) => {
   if (!comment) return null;
 
@@ -43,8 +47,19 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
     } else if (facts.classification === 'great') {
       badgeLabel = facts.isBestMove ? 'Best Move' : 'Great Move';
       badgeColor = 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
+    } else {
+      badgeLabel = 'Good Move';
+      badgeColor = 'bg-blue-500/20 text-blue-300 border-blue-500/40';
     }
   }
+
+  const showBetterMoveBtn =
+    facts &&
+    facts.cpLoss >= 50 &&
+    facts.bestMoveSan &&
+    facts.bestMoveUci &&
+    facts.bestMoveUci.length >= 4 &&
+    onShowBetterMove;
 
   return (
     <div className="w-full max-w-[520px] bg-slate-900/95 border border-slate-700/70 rounded-xl p-3 shadow-xl flex items-start gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
@@ -53,9 +68,9 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
         <Bot className="w-4 h-4" />
       </div>
 
-      {/* Main Comment Text */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+      {/* Main Comment Text & Badge */}
+      <div className="flex-1 min-w-0 space-y-1">
+        <div className="flex items-center gap-2">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${badgeColor}`}>
             {badgeLabel}
           </span>
@@ -70,9 +85,35 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
             </span>
           )}
         </div>
+
         <p className="text-xs text-slate-200 leading-relaxed font-medium">
           {comment}
         </p>
+
+        {/* Rate limit warning if active */}
+        {isRateLimited && (
+          <div className="text-[10px] text-amber-400 font-medium pt-0.5">
+            ⚠️ Gemini API quota paused. Showing engine facts analysis.
+          </div>
+        )}
+
+        {/* Show Better Move Button */}
+        {showBetterMoveBtn && (
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                const from = facts!.bestMoveUci!.slice(0, 2);
+                const to = facts!.bestMoveUci!.slice(2, 4);
+                onShowBetterMove(from, to);
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+            >
+              <Navigation className="w-3 h-3 text-amber-400" />
+              <span>Show better move ({facts.bestMoveSan}) on board</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Action Buttons */}

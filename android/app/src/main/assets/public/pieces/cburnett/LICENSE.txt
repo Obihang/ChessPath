@@ -1,4 +1,0 @@
-Piece Set: cburnett
-Author: Colin M.L. Burnett
-License: GPLv2+
-Source: github.com/lichess-org/lila (public/piece/cburnett, see COPYING.md)

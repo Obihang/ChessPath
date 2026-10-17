@@ -1,7 +1,12 @@
 /**
- * Speech service providing robust text-to-speech with phonetic chess notation parsing,
- * Chromium/WebKit bug workarounds, and browser/native speech recognition capability.
+ * Speech service providing Gemini-only Text-to-Speech (TTS) with phonetic chess notation parsing,
+ * IndexedDB audio caching, playback rate control, and MediaRecorder microphone STT transcription.
+ * Fully static - zero server required. No browser speech synthesis or native web speech API used.
  */
+
+import { AppSettings } from '../types/chess';
+import { geminiService } from './geminiService';
+import { soundService } from './audioService';
 
 // Phonetic converter for chess algebraic notation
 export function convertChessNotationToSpokenText(text: string): string {
@@ -71,10 +76,6 @@ export function convertChessNotationToSpokenText(text: string): string {
   return spoken;
 }
 
-import { AppSettings } from '../types/chess';
-import { geminiService } from './geminiService';
-import { soundService } from './audioService';
-
 export interface SpeechDiagnosticEntry {
   id: string;
   time: string;
@@ -83,45 +84,15 @@ export interface SpeechDiagnosticEntry {
   details?: Record<string, any>;
 }
 
-export interface SpeechEngineStatus {
-  isSupported: boolean;
-  isRecognitionSupported: boolean;
-  voicesCount: number;
-  availableVoices: { name: string; lang: string; default: boolean }[];
-  isSpeaking: boolean;
-  isPaused: boolean;
-  isPending: boolean;
-  hasUserActivation: boolean;
-  audioContextState: string;
-}
-
 class SpeechService {
-  private voices: SpeechSynthesisVoice[] = [];
-  private currentUtterance: SpeechSynthesisUtterance | null = null;
-  private currentAudio: HTMLAudioElement | null = null;
   private isSpeakingState: boolean = false;
-  private retryAttempted: boolean = false;
-  private cancelTimeout: any = null;
-  private resumeInterval: any = null;
-  private activeUtterances: Set<SpeechSynthesisUtterance> = new Set();
+  private currentAudio: HTMLAudioElement | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordedChunks: Blob[] = [];
+  private recordingTimer: NodeJS.Timeout | null = null;
+  private isRecordingState: boolean = false;
   private diagnosticLogs: SpeechDiagnosticEntry[] = [];
   private diagnosticListeners: Set<() => void> = new Set();
-
-  constructor() {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      this.loadVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        this.loadVoices();
-        this.logDiagnostic(
-          'info',
-          `voiceschanged event fired by browser. Total voices: ${this.voices.length}`,
-          { voicesCount: this.voices.length }
-        );
-      };
-    } else {
-      this.logDiagnostic('warn', 'Web Speech API (speechSynthesis) is not available in window.');
-    }
-  }
 
   public logDiagnostic(
     type: SpeechDiagnosticEntry['type'],
@@ -149,14 +120,6 @@ class SpeechService {
       console.log(prefix, message, details || '');
     }
 
-    if (typeof window !== 'undefined') {
-      (window as any).__speechDiagnostics = {
-        logs: this.diagnosticLogs,
-        getStatus: () => this.getEngineStatus(),
-        service: this,
-      };
-    }
-
     this.diagnosticListeners.forEach((fn) => {
       try {
         fn();
@@ -172,7 +135,6 @@ class SpeechService {
 
   public clearDiagnosticLogs() {
     this.diagnosticLogs = [];
-    this.logDiagnostic('info', 'Diagnostic log cleared by user.');
   }
 
   public subscribeDiagnostics(listener: () => void): () => void {
@@ -182,120 +144,33 @@ class SpeechService {
     };
   }
 
-  public getEngineStatus(): SpeechEngineStatus {
-    const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
-    const synth = isSupported ? window.speechSynthesis : null;
-    const userActivation =
-      typeof navigator !== 'undefined' && (navigator as any).userActivation
-        ? (navigator as any).userActivation.hasBeenActive
-        : true;
-
-    return {
-      isSupported,
-      isRecognitionSupported: this.isRecognitionAvailable(),
-      voicesCount: this.voices.length,
-      availableVoices: this.voices.slice(0, 8).map((v) => ({
-        name: v.name,
-        lang: v.lang,
-        default: v.default,
-      })),
-      isSpeaking: synth ? synth.speaking : false,
-      isPaused: synth ? synth.paused : false,
-      isPending: synth ? synth.pending : false,
-      hasUserActivation: userActivation,
-      audioContextState: soundService.getContextState(),
-    };
-  }
-
   public unlock() {
     soundService.initCtx();
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.resume();
-        if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-          const primer = new SpeechSynthesisUtterance(' ');
-          primer.volume = 0.01;
-          primer.rate = 1.0;
-          window.speechSynthesis.speak(primer);
-        }
-        this.logDiagnostic('info', 'Audio gesture unlock: window.speechSynthesis.resume() triggered.');
-      } catch {
-        // Ignored
-      }
-    }
-  }
-
-  private loadVoices() {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      const v = window.speechSynthesis.getVoices();
-      if (v && v.length > 0) {
-        this.voices = v;
-      }
-    }
-  }
-
-  public getVoices(): SpeechSynthesisVoice[] {
-    if (this.voices.length === 0 && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      this.loadVoices();
-    }
-    return this.voices;
-  }
-
-  public isAvailable(): boolean {
-    return typeof window !== 'undefined' && 'speechSynthesis' in window;
-  }
-
-  public isRecognitionAvailable(): boolean {
-    if (typeof window === 'undefined') return false;
-    return 'SpeechRecognition' in window || 'webkitSpeechRecognition' in window;
   }
 
   public isSpeaking(): boolean {
     return this.isSpeakingState;
   }
 
-  public stop(reason: string = 'User/app requested stop') {
-    if (this.cancelTimeout) {
-      clearTimeout(this.cancelTimeout);
-      this.cancelTimeout = null;
-    }
-
-    if (this.resumeInterval) {
-      clearInterval(this.resumeInterval);
-      this.resumeInterval = null;
-    }
-
+  public stop(reason: string = 'User requested stop') {
     soundService.stopActiveSpeech();
-
     if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.currentTime = 0;
+      try {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+      } catch {
+        // Ignored
+      }
       this.currentAudio = null;
     }
-
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      const synth = window.speechSynthesis;
-      if (synth.speaking || synth.pending) {
-        this.logDiagnostic('info', `Stopping active speech (${reason}). Calling speechSynthesis.cancel().`);
-        try {
-          synth.cancel();
-          synth.resume();
-        } catch (e) {
-          console.warn('speechSynthesis.cancel error', e);
-        }
-      }
-    }
-
-    this.activeUtterances.clear();
     this.isSpeakingState = false;
-    this.currentUtterance = null;
+    this.logDiagnostic('info', `Stopped active audio playback (${reason}).`);
   }
 
   /**
-   * Universal coach speech dispatcher:
-   * Prioritizes Gemini Natural Voice if enabled and key is present,
-   * with automatic, instantaneous fallback to offline Web Speech API.
-   * Fully instrumented with diagnostic logging and mute checks.
+   * Universal Coach Speech Dispatcher:
+   * Calls Gemini TTS model (gemini-3.8-flash-lite-tts / gemini-3.8-flash-tts) using Gemini API Key,
+   * converts returned audio to WAV, caches in IndexedDB, and plays via Web Audio HTML5 with speed control.
    */
   public async speakWithCoach(
     text: string,
@@ -306,334 +181,211 @@ class SpeechService {
       onError?: (err: unknown) => void;
     } = {}
   ): Promise<{ usedNatural: boolean; error?: string }> {
-    this.logDiagnostic('trigger', `speakWithCoach invoked: "${text.slice(0, 60)}${text.length > 60 ? '...' : ''}"`, {
+    this.logDiagnostic('trigger', `speakWithCoach invoked: "${text.slice(0, 50)}..."`, {
       voiceEnabled: settings.voiceEnabled,
-      soundEnabled: settings.soundEnabled,
       voiceVolume: settings.voiceVolume,
       voiceRate: settings.voiceRate,
-      useNaturalVoice: settings.useNaturalVoice,
+      geminiVoice: settings.geminiVoice || 'Kore',
       hasGeminiKey: !!settings.geminiApiKey || geminiService.hasKey(),
     });
 
     if (!settings.voiceEnabled) {
-      this.logDiagnostic(
-        'blocked',
-        'Voice is MUTED (voiceEnabled is false). Speech was intentionally blocked by mute setting. Click Mute in Coach header or Settings to enable.',
-        { voiceEnabled: false }
-      );
+      this.logDiagnostic('blocked', 'Voice Coach is muted in Settings.');
       options.onError?.(new Error('Voice Coach is disabled in Settings'));
       return { usedNatural: false, error: 'Voice is muted' };
     }
 
     if (!text || !text.trim()) {
-      this.logDiagnostic('warn', 'Empty text passed to speakWithCoach. Operation skipped.');
       return { usedNatural: false };
     }
 
-    if (settings.voiceVolume <= 0) {
-      this.logDiagnostic(
-        'warn',
-        `Voice volume is set to ${Math.round(settings.voiceVolume * 100)}% (silent). Audio will not be audible. Increase volume in Settings.`,
-        { volume: settings.voiceVolume }
-      );
-    }
-
-    const spokenText = convertChessNotationToSpokenText(text);
-
-    // Try Gemini Natural Voice if enabled and key exists
-    const isGeminiProvider = !settings.aiProvider || settings.aiProvider === 'gemini';
-    const hasKey = !!(settings.geminiApiKey || (isGeminiProvider && geminiService.hasKey()));
-    if (settings.useNaturalVoice && isGeminiProvider && hasKey) {
-      try {
-        this.logDiagnostic('info', 'Attempting Gemini Natural Voice generation (model: gemini-3.8-flash-lite-tts)...');
-        options.onStart?.();
-        this.isSpeakingState = true;
-
-        const result = await geminiService.generateNaturalVoice(spokenText, settings.geminiApiKey);
-
-        if (result.success && result.audioBuffer) {
-          this.logDiagnostic('start', `Gemini Natural Voice received (${result.audioBuffer.byteLength} bytes). Starting audio playback...`);
-          const played = await soundService.playAudioArrayBuffer(
-            result.audioBuffer,
-            settings.voiceVolume,
-            () => {
-              this.isSpeakingState = false;
-              this.logDiagnostic('end', 'Gemini Natural Voice audio finished playing.');
-              options.onEnd?.();
-            }
-          );
-
-          if (played) {
-            return { usedNatural: true };
-          }
-          this.isSpeakingState = false;
-          this.logDiagnostic('warn', 'Audio playback failed through Web Audio / HTML5. Falling back to browser SpeechSynthesis...');
-        } else {
-          this.isSpeakingState = false;
-          this.logDiagnostic(
-            'warn',
-            `Gemini Natural Voice error: "${result.error || 'Failed to generate'}". Falling back to browser SpeechSynthesis...`
-          );
-        }
-      } catch (err: any) {
-        this.isSpeakingState = false;
-        this.logDiagnostic(
-          'warn',
-          `Gemini Natural Voice exception: "${err?.message || err}". Falling back to browser SpeechSynthesis...`
-        );
-      }
-    } else {
-      if (settings.useNaturalVoice && isGeminiProvider && !hasKey) {
-        this.logDiagnostic('info', 'Natural Voice enabled, but no Gemini key configured. Using offline Web Speech API.');
-      } else {
-        this.logDiagnostic('info', 'Using offline Web Speech API (speechSynthesis).');
-      }
-    }
-
-    // Fallback to browser SpeechSynthesis
-    this.speak(spokenText, {
-      rate: settings.voiceRate,
-      volume: settings.voiceVolume,
-      voiceURI: settings.selectedVoiceURI,
-      onStart: options.onStart,
-      onEnd: options.onEnd,
-      onError: options.onError,
-    });
-
-    return { usedNatural: false };
-  }
-
-  public playAudioUrl(
-    url: string,
-    options: {
-      volume?: number;
-      onEnd?: () => void;
-      onError?: (err: unknown) => void;
-    } = {}
-  ): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.stop('playAudioUrl requested');
-
-      try {
-        const audio = new Audio(url);
-        audio.volume = options.volume ?? 1.0;
-        this.currentAudio = audio;
-        this.isSpeakingState = true;
-
-        audio.onended = () => {
-          this.isSpeakingState = false;
-          this.currentAudio = null;
-          options.onEnd?.();
-          resolve(true);
-        };
-
-        audio.onerror = (e) => {
-          this.isSpeakingState = false;
-          this.currentAudio = null;
-          options.onError?.(e);
-          resolve(false);
-        };
-
-        audio
-          .play()
-          .then(() => {
-            resolve(true);
-          })
-          .catch((err) => {
-            console.warn('Audio playback error', err);
-            this.isSpeakingState = false;
-            this.currentAudio = null;
-            options.onError?.(err);
-            resolve(false);
-          });
-      } catch (e) {
-        this.isSpeakingState = false;
-        options.onError?.(e);
-        resolve(false);
-      }
-    });
-  }
-
-  public speak(
-    text: string,
-    options: {
-      rate?: number;
-      volume?: number;
-      voiceURI?: string;
-      onStart?: () => void;
-      onEnd?: () => void;
-      onError?: (err: unknown) => void;
-    } = {}
-  ) {
-    if (!this.isAvailable()) {
-      this.logDiagnostic('error', 'SpeechSynthesis API is not supported in this browser environment.');
-      options.onError?.(new Error('SpeechSynthesis not available in this browser.'));
-      return;
-    }
-
-    this.retryAttempted = false;
-
-    if (!text || !text.trim()) {
-      this.logDiagnostic('warn', 'Empty text provided to speak(). Operation skipped.');
-      return;
-    }
-
-    const synth = window.speechSynthesis;
-    const spokenText = convertChessNotationToSpokenText(text);
-
-    this.logDiagnostic(
-      'trigger',
-      `Queueing SpeechSynthesis utterance: "${spokenText.slice(0, 60)}${spokenText.length > 60 ? '...' : ''}"`,
-      {
-        volume: options.volume ?? 1.0,
-        rate: options.rate ?? 1.0,
-        synthSpeaking: synth.speaking,
-        synthPaused: synth.paused,
-        synthPending: synth.pending,
-        voicesLoaded: this.voices.length,
-      }
-    );
-
-    if ((options.volume ?? 1.0) <= 0) {
-      this.logDiagnostic('warn', 'Utterance volume is set to 0.0 (silent). No sound will be emitted.');
-    }
-
-    // Stop current speech cleanly without triggering an immediate cancellation race
     this.stop('Replacing with new utterance');
 
-    if (synth.paused) {
-      this.logDiagnostic('info', 'Synthesizer was paused; calling resume().');
-      synth.resume();
-    }
+    const spokenText = convertChessNotationToSpokenText(text);
 
-    // Schedule utterance with a safe delay so Chromium's cancel clears the audio buffer
-    this.cancelTimeout = setTimeout(() => {
-      try {
-        if (synth.paused) {
-          synth.resume();
-        }
+    try {
+      options.onStart?.();
+      this.isSpeakingState = true;
 
-        const utterance = new SpeechSynthesisUtterance(spokenText);
-        utterance.lang = 'en-US';
-        utterance.rate = options.rate ?? 1.0;
-        utterance.volume = options.volume ?? 1.0;
+      const result = await geminiService.generateNaturalVoice(spokenText, settings.geminiApiKey);
 
-        const allVoices = this.getVoices();
-        if (options.voiceURI) {
-          const match = allVoices.find((v) => v.voiceURI === options.voiceURI);
-          if (match) utterance.voice = match;
-        } else if (allVoices.length > 0) {
-          const enVoice =
-            allVoices.find(
-              (v) =>
-                v.lang.startsWith('en') &&
-                (v.name.includes('Natural') ||
-                  v.name.includes('Google') ||
-                  v.name.includes('Samantha') ||
-                  v.name.includes('Daniel') ||
-                  v.name.includes('Alex'))
-            ) || allVoices.find((v) => v.lang.startsWith('en'));
-          if (enVoice) utterance.voice = enVoice;
-        }
-
-        this.logDiagnostic(
-          'info',
-          `Configured utterance: voice="${utterance.voice?.name || 'Default'}" (${utterance.voice?.lang || 'en-US'}), vol=${utterance.volume}, rate=${utterance.rate}`
+      if (result.success && result.audioBuffer) {
+        this.logDiagnostic('start', `Gemini TTS audio received (${result.audioBuffer.byteLength} bytes). Playing at ${settings.voiceRate}x speed...`);
+        const played = await soundService.playAudioArrayBuffer(
+          result.audioBuffer,
+          settings.voiceVolume,
+          () => {
+            this.isSpeakingState = false;
+            this.logDiagnostic('end', 'Gemini TTS audio playback finished.');
+            options.onEnd?.();
+          },
+          settings.voiceRate
         );
 
-        utterance.onstart = () => {
-          this.isSpeakingState = true;
-          this.logDiagnostic('start', 'SpeechSynthesis onstart event fired (audio playback actively started).', {
-            textPreview: spokenText.slice(0, 40),
-            voice: utterance.voice?.name,
-          });
-          options.onStart?.();
-
-          // Watchdog: only resume if paused (never call pause()!)
-          if (this.resumeInterval) clearInterval(this.resumeInterval);
-          this.resumeInterval = setInterval(() => {
-            if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-              if (window.speechSynthesis.speaking && window.speechSynthesis.paused) {
-                this.logDiagnostic('info', 'Synthesizer paused during speech; calling resume() to unblock.');
-                window.speechSynthesis.resume();
-              }
-            }
-          }, 2000);
-        };
-
-        utterance.onend = () => {
-          if (this.resumeInterval) {
-            clearInterval(this.resumeInterval);
-            this.resumeInterval = null;
-          }
-          this.activeUtterances.delete(utterance);
-          this.isSpeakingState = false;
-          this.currentUtterance = null;
-          this.logDiagnostic('end', 'SpeechSynthesis onend event fired (playback completed successfully).');
-          options.onEnd?.();
-        };
-
-        utterance.onerror = (e: any) => {
-          if (this.resumeInterval) {
-            clearInterval(this.resumeInterval);
-            this.resumeInterval = null;
-          }
-          this.activeUtterances.delete(utterance);
-          this.isSpeakingState = false;
-          this.currentUtterance = null;
-
-          const errCode = e?.error || 'unknown';
-          let explanation = '';
-          if (errCode === 'not-allowed') {
-            explanation = 'BLOCKED by browser autoplay / permission policy. User must tap the page / test button to allow speech synthesis in this frame.';
-          } else if (errCode === 'synthesis-failed') {
-            if (!this.retryAttempted) {
-              this.retryAttempted = true;
-              this.logDiagnostic('info', 'synthesis-failed error detected, retrying once in 500ms...');
-              setTimeout(() => this.speak(spokenText, options), 500);
-              return;
-            }
-            explanation = 'Browser speech synthesis engine failed to render audio stream (common in headless/sandboxed frames).';
-          } else if (errCode === 'canceled') {
-            explanation = 'CANCELLED: speechSynthesis.cancel() was called or speech was pre-empted.';
-          } else if (errCode === 'interrupted') {
-            explanation = 'INTERRUPTED: another utterance or audio source interrupted playback.';
-          } else if (errCode === 'audio-busy') {
-            explanation = 'AUDIO BUSY: audio device locked by another process.';
-          } else {
-            explanation = `Code: ${errCode}`;
-          }
-
-          const isNonFatal = errCode === 'canceled' || errCode === 'interrupted' || errCode === 'synthesis-failed';
-          this.logDiagnostic(
-            isNonFatal ? 'warn' : 'error',
-            `SpeechSynthesis onerror event fired: [${errCode}] - ${explanation}`,
-            {
-              error: errCode,
-              elapsedTime: e?.elapsedTime,
-            }
-          );
-          options.onError?.(e);
-        };
-
-        this.currentUtterance = utterance;
-        this.activeUtterances.add(utterance);
-        (window as any).__lastUtterance = utterance;
-
-        this.logDiagnostic('info', 'Dispatched window.speechSynthesis.speak(). Waiting for audio output...');
-        synth.speak(utterance);
-
-        if (synth.paused) {
-          synth.resume();
+        if (played) {
+          return { usedNatural: true };
         }
-      } catch (err: any) {
-        this.logDiagnostic('error', `Exception while calling speechSynthesis.speak: ${err?.message || err}`, {
-          error: err,
-        });
         this.isSpeakingState = false;
-        options.onError?.(err);
+        const errStr = 'Web Audio / HTML5 playback failed.';
+        this.logDiagnostic('error', errStr);
+        options.onError?.(new Error(errStr));
+        return { usedNatural: false, error: errStr };
+      } else {
+        this.isSpeakingState = false;
+        const errStr = result.error || 'Gemini TTS audio generation failed.';
+        this.logDiagnostic('error', `Gemini TTS error: "${errStr}"`);
+        options.onError?.(new Error(errStr));
+        return { usedNatural: false, error: errStr };
       }
-    }, 80);
+    } catch (err: any) {
+      this.isSpeakingState = false;
+      const errStr = err?.message || 'Gemini TTS exception occurred.';
+      this.logDiagnostic('error', `Gemini TTS exception: "${errStr}"`);
+      options.onError?.(err);
+      return { usedNatural: false, error: errStr };
+    }
+  }
+
+  // --- Microphone Recording & Speech-to-Text (STT) ---
+
+  public isRecording(): boolean {
+    return this.isRecordingState;
+  }
+
+  public async startRecording(maxDurationMs: number = 30000): Promise<void> {
+    if (this.isRecordingState) return;
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('NotFoundError: Microphone access is not supported in this browser environment.');
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.recordedChunks = [];
+
+      let options: MediaRecorderOptions = {};
+      if (typeof MediaRecorder !== 'undefined') {
+        if (MediaRecorder.isTypeSupported('audio/webm')) options.mimeType = 'audio/webm';
+        else if (MediaRecorder.isTypeSupported('audio/mp4')) options.mimeType = 'audio/mp4';
+        else if (MediaRecorder.isTypeSupported('audio/wav')) options.mimeType = 'audio/wav';
+      }
+
+      this.mediaRecorder = new MediaRecorder(stream, options);
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          this.recordedChunks.push(event.data);
+        }
+      };
+
+      this.mediaRecorder.start(100);
+      this.isRecordingState = true;
+      this.logDiagnostic('info', 'Microphone recording started (max 30s)...');
+
+      if (this.recordingTimer) clearTimeout(this.recordingTimer);
+      this.recordingTimer = setTimeout(() => {
+        if (this.isRecordingState) {
+          this.logDiagnostic('info', 'Max 30s recording duration reached. Auto stopping recording...');
+          this.stopRecording().catch(() => {});
+        }
+      }, maxDurationMs);
+    } catch (err: any) {
+      this.isRecordingState = false;
+      this.logDiagnostic('error', `Microphone permission/access error: ${err?.name || err?.message || err}`);
+      throw err;
+    }
+  }
+
+  public async stopRecording(): Promise<Blob> {
+    if (this.recordingTimer) {
+      clearTimeout(this.recordingTimer);
+      this.recordingTimer = null;
+    }
+
+    if (!this.mediaRecorder || !this.isRecordingState) {
+      this.isRecordingState = false;
+      return new Blob([], { type: 'audio/webm' });
+    }
+
+    return new Promise((resolve, reject) => {
+      if (!this.mediaRecorder) {
+        this.isRecordingState = false;
+        resolve(new Blob([], { type: 'audio/webm' }));
+        return;
+      }
+
+      const recorder = this.mediaRecorder;
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(this.recordedChunks, { type: mimeType });
+        this.isRecordingState = false;
+
+        // Stop all tracks to release mic hardware
+        try {
+          recorder.stream.getTracks().forEach((track) => track.stop());
+        } catch {
+          // Ignored
+        }
+
+        this.logDiagnostic('info', `Microphone recording stopped (${blob.size} bytes).`);
+        resolve(blob);
+      };
+
+      recorder.onerror = (e: any) => {
+        this.isRecordingState = false;
+        reject(e?.error || new Error('MediaRecorder error'));
+      };
+
+      try {
+        recorder.stop();
+      } catch {
+        this.isRecordingState = false;
+        const mimeType = recorder.mimeType || 'audio/webm';
+        resolve(new Blob(this.recordedChunks, { type: mimeType }));
+      }
+    });
+  }
+
+  /**
+   * Tests the microphone by recording 3 seconds of audio, sending it to Gemini STT,
+   * and returning the transcript or a human-friendly error message.
+   */
+  public async testMicrophone(customKey?: string): Promise<{ success: boolean; transcript?: string; error?: string }> {
+    this.logDiagnostic('info', 'Testing microphone for 3 seconds...');
+    try {
+      await this.startRecording(3000);
+      await new Promise((res) => setTimeout(res, 3000));
+      const audioBlob = await this.stopRecording();
+
+      if (!audioBlob || audioBlob.size === 0) {
+        return { success: false, error: 'No audio recorded from microphone.' };
+      }
+
+      this.logDiagnostic('info', 'Transcribing 3s test audio with Gemini STT...');
+      const res = await geminiService.transcribeAudio(audioBlob, audioBlob.type, customKey);
+      return res;
+    } catch (e: any) {
+      let errName = e?.name || '';
+      let errMsg = e?.message || '';
+
+      if (errName === 'NotAllowedError' || errMsg.includes('Permission denied')) {
+        return { success: false, error: 'Permission denied: Microphone permission was blocked by the browser/app.' };
+      }
+      if (errName === 'NotFoundError' || errMsg.includes('DevicesNotFound')) {
+        return { success: false, error: 'No microphone found on this device.' };
+      }
+      if (errMsg.includes('NO_KEY')) {
+        return { success: false, error: 'No Gemini API key found for audio transcription.' };
+      }
+      if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+        return { success: false, error: 'Gemini quota reached (429). Please wait a moment.' };
+      }
+      if (errMsg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        return { success: false, error: 'Offline: No internet connection for transcription.' };
+      }
+
+      return { success: false, error: `Microphone test error: ${errMsg || errName}` };
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AppSettings } from '../../types/chess';
-import { speechService, SpeechDiagnosticEntry, SpeechEngineStatus } from '../../services/speechService';
+import { speechService, SpeechDiagnosticEntry } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import {
   Activity,
@@ -11,7 +11,6 @@ import {
   Copy,
   Check,
   AlertTriangle,
-  Info,
   Sparkles,
   Radio,
 } from 'lucide-react';
@@ -28,7 +27,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
   compact = false,
 }) => {
   const [logs, setLogs] = useState<SpeechDiagnosticEntry[]>(speechService.getDiagnosticLogs());
-  const [status, setStatus] = useState<SpeechEngineStatus>(speechService.getEngineStatus());
   const [filter, setFilter] = useState<'all' | 'errors' | 'triggers'>('all');
   const [copied, setCopied] = useState(false);
   const [isTestingSpeech, setIsTestingSpeech] = useState(false);
@@ -38,7 +36,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
   useEffect(() => {
     const update = () => {
       setLogs([...speechService.getDiagnosticLogs()]);
-      setStatus(speechService.getEngineStatus());
     };
 
     update();
@@ -57,12 +54,10 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
     speechService.logDiagnostic('info', 'Manual diagnostic test initiated by user click.');
 
-    speechService.speak(
-      'Diagnostic test. The ChessPath voice coach is active and speaking on your device.',
+    speechService.speakWithCoach(
+      'Diagnostic test. The ChessPath Gemini voice coach is active and ready on your device.',
+      settings,
       {
-        rate: settings.voiceRate,
-        volume: settings.voiceVolume,
-        voiceURI: settings.selectedVoiceURI,
         onStart: () => setIsTestingSpeech(true),
         onEnd: () => setIsTestingSpeech(false),
         onError: () => setIsTestingSpeech(false),
@@ -117,7 +112,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
     return true;
   });
 
-  const hasNotAllowedError = logs.some((l) => l.message.includes('not-allowed'));
   const isMuted = !settings.voiceEnabled;
   const isVolumeZero = settings.voiceVolume <= 0;
 
@@ -160,30 +154,22 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
         {/* Status Indicators Pill Bar */}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-          <span
-            className={`px-2 py-0.5 rounded-full border font-medium ${
-              status.isSupported
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-            }`}
-          >
-            Web Speech: {status.isSupported ? 'Supported' : 'Not Supported'}
+          <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300 font-medium">
+            Engine: Gemini TTS (WAV/AudioContext)
           </span>
 
           <span
             className={`px-2 py-0.5 rounded-full border font-medium ${
-              status.isSpeaking
+              speechService.isSpeaking()
                 ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 animate-pulse'
-                : status.isPaused
-                ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
                 : 'bg-slate-800 border-slate-700 text-slate-300'
             }`}
           >
-            Synthesizer: {status.isSpeaking ? 'Speaking' : status.isPaused ? 'Paused' : 'Idle'}
+            Status: {speechService.isSpeaking() ? 'Speaking' : 'Idle'}
           </span>
 
           <span className="px-2 py-0.5 rounded-full border bg-slate-800 border-slate-700 text-slate-300 font-medium">
-            Voices: {status.voicesCount} loaded
+            Voice: {settings.geminiVoice || 'Kore'}
           </span>
 
           <span
@@ -195,15 +181,11 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
           >
             Volume: {Math.round(settings.voiceVolume * 100)}%
           </span>
-
-          <span className="px-2 py-0.5 rounded-full border bg-slate-800 border-slate-700 text-slate-300 font-medium">
-            AudioContext: {status.audioContextState}
-          </span>
         </div>
       </div>
 
-      {/* Troubleshooting Alert if Muted or Blocked */}
-      {(isMuted || hasNotAllowedError || isVolumeZero) && (
+      {/* Troubleshooting Alert if Muted */}
+      {(isMuted || isVolumeZero) && (
         <div className="px-3 py-2 bg-amber-500/10 border-b border-amber-500/20 text-amber-300 text-[11px] space-y-1">
           {isMuted && (
             <div className="flex items-center gap-1.5 font-medium">
@@ -215,14 +197,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
             <div className="flex items-center gap-1.5">
               <VolumeX className="w-3.5 h-3.5 shrink-0 text-rose-400" />
               <span>Voice Volume is set to 0%. Increase the volume slider to hear sound.</span>
-            </div>
-          )}
-          {hasNotAllowedError && (
-            <div className="flex items-center gap-1.5">
-              <Info className="w-3.5 h-3.5 shrink-0 text-blue-400" />
-              <span>
-                Browser autoplay policy blocked speech without user gesture. Tap <strong>Test Web Speech API</strong> below to grant permission.
-              </span>
             </div>
           )}
         </div>
@@ -240,12 +214,12 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
             {isTestingSpeech ? (
               <>
                 <Radio className="w-3 h-3 animate-spin text-amber-400" />
-                <span>Speaking...</span>
+                <span>Generating Voice...</span>
               </>
             ) : (
               <>
                 <Play className="w-3 h-3" />
-                <span>Test Web Speech API</span>
+                <span>Test Gemini Voice</span>
               </>
             )}
           </button>
@@ -317,7 +291,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
       <div className={`overflow-y-auto p-2 space-y-1 font-mono text-[11px] ${compact ? 'max-h-48' : 'max-h-64'}`}>
         {filteredLogs.length === 0 ? (
           <div className="py-6 text-center text-slate-500 font-sans text-xs">
-            No diagnostic events recorded yet. Click <strong>Test Web Speech API</strong> above to simulate speech output.
+            No diagnostic events recorded yet. Click <strong>Test Gemini Voice</strong> above to test audio output.
           </div>
         ) : (
           filteredLogs.map((entry) => {

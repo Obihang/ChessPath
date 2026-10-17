@@ -39,6 +39,8 @@ import {
   Sparkles,
   Loader2,
   Lightbulb,
+  Mic,
+  MicOff,
 } from 'lucide-react';
 
 interface PlayViewProps {
@@ -107,6 +109,9 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [copiedPgn, setCopiedPgn] = useState<boolean>(false);
   const [activeEngine, setActiveEngine] = useState<'stockfish' | 'minimax'>('stockfish');
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [customArrow, setCustomArrow] = useState<{ from: string; to: string; color?: string } | null>(null);
+  const [isPlayRecording, setIsPlayRecording] = useState(false);
+  const [isPlayTranscribing, setIsPlayTranscribing] = useState(false);
 
   // Clocks
   const [whiteTime, setWhiteTime] = useState<number>(0);
@@ -185,6 +190,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
   // Initialize a New Game
   const startNewGame = useCallback(() => {
+    setCustomArrow(null);
     resetLiveCoach();
     const newGame = new Chess();
     setGame(newGame);
@@ -358,6 +364,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
         checkTermination(currGame);
 
         // Process live coach commentary for opponent move
+        speechService.stop('Opponent move executed');
         const currentSanList = [...moves.map((m) => m.san), move.san];
         processCoachMove(moveRec, prevFen, currGame.fen(), false, currentSanList);
       }
@@ -391,6 +398,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
       setMoves((prev) => [...prev, userMoveRec]);
 
       // Process live coach commentary for player move
+      speechService.stop('Player move executed');
+      setCustomArrow(null);
       const currentSanList = [...moves.map((m) => m.san), lastHist.san];
       processCoachMove(userMoveRec, prevFen, game.fen(), true, currentSanList);
     }
@@ -580,6 +589,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           showCoordinates={settings.showCoordinates}
           disabled={isBoardDisabled}
           lastMove={lastMove}
+          customArrow={customArrow}
           onMove={handleUserMove}
         />
         <LiveChatIndicator onClick={onOpenCoach} />
@@ -645,6 +655,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           onOpenCoach={onOpenCoach}
           onDismiss={dismissCoachComment}
           onRepeat={repeatCoachComment}
+          onShowBetterMove={(from, to) => setCustomArrow({ from, to, color: '#f59e0b' })}
         />
       )}
 
@@ -675,6 +686,65 @@ export const PlayView: React.FC<PlayViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                speechService.unlock();
+                if (isPlayRecording) {
+                  setIsPlayRecording(false);
+                  setIsPlayTranscribing(true);
+                  try {
+                    const audioBlob = await speechService.stopRecording();
+                    if (audioBlob && audioBlob.size > 0) {
+                      const res = await geminiService.transcribeAudio(
+                        audioBlob,
+                        audioBlob.type,
+                        settings.geminiApiKey || settings.aiApiKey
+                      );
+                      if (res.success && res.transcript) {
+                        setFallbackNotice(`Microphone transcript: "${res.transcript}"`);
+                        if (onOpenCoach) onOpenCoach();
+                      } else if (res.error) {
+                        setFallbackNotice(`STT error: ${res.error}`);
+                      }
+                    }
+                  } catch (e: any) {
+                    console.warn('Play mic error', e);
+                  } finally {
+                    setIsPlayTranscribing(false);
+                    setTimeout(() => setFallbackNotice(null), 5000);
+                  }
+                  return;
+                }
+
+                try {
+                  await speechService.startRecording(30000);
+                  setIsPlayRecording(true);
+                } catch (e: any) {
+                  setIsPlayRecording(false);
+                  setFallbackNotice('Microphone permission blocked or unavailable.');
+                  setTimeout(() => setFallbackNotice(null), 4000);
+                }
+              }}
+              disabled={isPlayTranscribing}
+              className={`p-1.5 rounded-lg border transition-colors ${
+                isPlayRecording
+                  ? 'bg-red-500/20 border-red-500 text-red-400 animate-pulse'
+                  : isPlayTranscribing
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+              title={isPlayRecording ? 'Tap to stop recording' : 'Voice Input (Microphone)'}
+            >
+              {isPlayTranscribing ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+              ) : isPlayRecording ? (
+                <MicOff className="w-3.5 h-3.5" />
+              ) : (
+                <Mic className="w-3.5 h-3.5" />
+              )}
+            </button>
+
             <button
               type="button"
               role="switch"

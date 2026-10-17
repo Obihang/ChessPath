@@ -81,12 +81,14 @@ export interface AppSettings {
   voiceEnabled: boolean;
   voiceRate: number;
   voiceVolume: number;
-  selectedVoiceURI: string;
+  geminiVoice: string;
   useNaturalVoice: boolean;
   pieceSet: string;
   pieceShadow: boolean;
   liveCoachEnabled: boolean;
   coachMode: CoachMode;
+  revealBetterMoveNames: boolean;
+  autoSendTranscribed: boolean;
 }
 
 export type CoachMode = 'learning' | 'criticizing' | 'simple' | 'competitive';

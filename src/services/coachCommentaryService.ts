@@ -3,6 +3,7 @@ import { CoachMode } from '../types/chess';
 import { geminiService } from './geminiService';
 import { speechService } from './speechService';
 import { engineService } from './engineService';
+import { storageService } from './storageService';
 
 export type MoveClassification = 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 
@@ -18,6 +19,8 @@ export interface MoveFacts {
   isBestMove: boolean;
   bestMoveSan?: string;
   bestMoveUci?: string;
+  opponentReplySan?: string;
+  bestNextMoveSan?: string;
   isCapture: boolean;
   isCheck: boolean;
   isCastling: boolean;
@@ -256,33 +259,39 @@ export const coachCommentaryService = {
     }
 
     // 5. Build strict factual prompt
+    const settings = storageService.getSettings();
+    const revealMoveNames = settings.revealBetterMoveNames ?? true;
     const maxSentences = this.getMaxSentencesForMode(mode);
     const mover = facts.moverColor === 'w' ? 'White' : 'Black';
     const recentNotation = recentMoves.slice(-8).join(' ') || facts.moveSan;
 
+    const moveNamingInstruction = revealMoveNames
+      ? `If a better move existed, name the move notation explicitly (${facts.bestMoveSan || 'engine move'}).`
+      : `Do NOT state exact move notation or coordinate names (like ${facts.bestMoveSan || 'Nf3'}). Instead, describe the strategic idea/motif in plain words (e.g., 'controlling the open central file').`;
+
     let modeGuidance = '';
     switch (mode) {
       case 'learning':
-        modeGuidance = `Explain the idea of ${facts.moveSan}, what it changes, and what to watch out for. Be encouraging. If it's a mistake or inaccuracy, explain why and suggest ${facts.bestMoveSan || 'the better line'}. Max ${maxSentences} short sentences.`;
+        modeGuidance = `1) State how good ${facts.moveSan} was (${facts.classification}). 2) If not best move, explain why ${revealMoveNames ? facts.bestMoveSan : 'the alternative idea'} was stronger. 3) Suggest what to focus on next (${facts.bestNextMoveSan ? `e.g. ${facts.bestNextMoveSan}` : 'key plan'}). Max ${maxSentences} short sentences.`;
         break;
       case 'criticizing':
-        modeGuidance = `Be direct, honest, and constructive with no flattery. State what was missed and name the better move (${facts.bestMoveSan || 'the engine suggestion'}). Max ${maxSentences} sentences.`;
+        modeGuidance = `1) State quality of ${facts.moveSan} directly. 2) State what was missed (${revealMoveNames ? facts.bestMoveSan : 'the key tactical idea'}). 3) Give a 1-phrase next action plan. Max ${maxSentences} sentences, direct tone.`;
         break;
       case 'simple':
-        modeGuidance = `Use simple words without chess notation jargon. Exactly 1 short sentence.`;
+        modeGuidance = `Use 1 plain sentence summarizing the move quality and next idea. No jargon.`;
         break;
       case 'competitive':
-        modeGuidance = `Be terse, concrete, and evaluation-focused. Max ${maxSentences} short sentences.`;
+        modeGuidance = `2 terse sentences stating move quality, eval shift, and key threat or next response.`;
         break;
     }
 
-    const systemInstruction = `You are a live chess coach commenting on a game in real-time.
+    const systemInstruction = `You are a live chess coach providing post-move commentary.
 Mode: ${mode}.
-Strict rules:
-1. Output PLAIN TEXT ONLY. NO markdown, NO asterisks, NO bolding, NO headers, NO bullet points.
+Rules:
+1. Output PLAIN TEXT ONLY. Absolutely NO markdown, NO asterisks, NO bolding, NO bullet points.
 2. Max ${maxSentences} short sentences.
-3. Base your comment ONLY on the provided engine facts. Do not evaluate the position yourself or calculate alternate long variations.
-4. Only mention moves that are legal in the FEN or provided in the facts.`;
+3. ${moveNamingInstruction}
+4. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts.`;
 
     const userPrompt = `Engine Facts:
 - Move played: ${facts.moveSan} by ${mover}
@@ -291,10 +300,12 @@ Strict rules:
 - Eval before: ${facts.evalBefore > 0 ? '+' : ''}${facts.evalBefore} cp
 - Eval after: ${facts.evalAfter > 0 ? '+' : ''}${facts.evalAfter} cp
 - Was best engine move: ${facts.isBestMove ? 'Yes' : 'No'}
-- Engine best move: ${facts.bestMoveSan || facts.bestMoveUci || 'N/A'}
-- Move flags: ${facts.isCheck ? 'check, ' : ''}${facts.isCapture ? 'capture, ' : ''}${facts.isCastling ? 'castles, ' : ''}${facts.isPromotion ? 'promotion, ' : ''}${facts.isSacrifice ? 'sacrifice, ' : ''}none
+- Engine best move: ${facts.bestMoveSan || 'N/A'}
+- Opponent best reply: ${facts.opponentReplySan || 'N/A'}
+- Recommended next move after reply: ${facts.bestNextMoveSan || 'N/A'}
+- Move flags: ${facts.isCheck ? 'check, ' : ''}${facts.isCapture ? 'capture, ' : ''}${facts.isCastling ? 'castles, ' : ''}none
 - Recent moves: ${recentNotation}
-- Current FEN: ${facts.fen}
+- FEN: ${facts.fen}
 
 Task: ${modeGuidance}`;
 
@@ -380,12 +391,14 @@ Task: ${modeGuidance}`;
       console.warn('Evaluation before move failed:', e);
     }
 
-    // 2. Evaluate position after the move
+    // 2. Evaluate position after the move & get opponent's best reply
     let evalAfter = 0;
+    let opponentReplyUci = '';
     try {
       const afterRes = await engineService.evaluate(currentFen, 250);
       // In currentFen, it is the opponent's turn. Negate score to keep mover's perspective.
       evalAfter = -afterRes.score;
+      opponentReplyUci = afterRes.bestMove || '';
     } catch (e) {
       console.warn('Evaluation after move failed:', e);
       evalAfter = evalBefore;
@@ -398,7 +411,7 @@ Task: ${modeGuidance}`;
     // 4. Was it the engine's best move?
     const isBestMove = !!(bestMoveUci && bestMoveUci.toLowerCase() === playedUci);
 
-    // 5. Compute best move SAN
+    // 5. Compute best move SAN, opponent reply SAN, and best next move SAN
     let bestMoveSan: string | undefined;
     if (bestMoveUci && bestMoveUci.length >= 4) {
       try {
@@ -409,6 +422,36 @@ Task: ${modeGuidance}`;
         const played = tempGame.move({ from, to, promotion });
         if (played) {
           bestMoveSan = played.san;
+        }
+      } catch {
+        // Fallback
+      }
+    }
+
+    let opponentReplySan: string | undefined;
+    let bestNextMoveSan: string | undefined;
+    if (opponentReplyUci && opponentReplyUci.length >= 4) {
+      try {
+        const oppGame = new Chess(currentFen);
+        const oppFrom = opponentReplyUci.substring(0, 2);
+        const oppTo = opponentReplyUci.substring(2, 4);
+        const oppPromo = opponentReplyUci.length > 4 ? opponentReplyUci[4] : undefined;
+        const oppPlayed = oppGame.move({ from: oppFrom, to: oppTo, promotion: oppPromo });
+        if (oppPlayed) {
+          opponentReplySan = oppPlayed.san;
+          // Calculate best next move for player after opponent replies
+          const nextFen = oppGame.fen();
+          const nextRes = await engineService.evaluate(nextFen, 180);
+          if (nextRes && nextRes.bestMove && nextRes.bestMove.length >= 4) {
+            const nextGame = new Chess(nextFen);
+            const nFrom = nextRes.bestMove.substring(0, 2);
+            const nTo = nextRes.bestMove.substring(2, 4);
+            const nPromo = nextRes.bestMove.length > 4 ? nextRes.bestMove[4] : undefined;
+            const nPlayed = nextGame.move({ from: nFrom, to: nTo, promotion: nPromo });
+            if (nPlayed) {
+              bestNextMoveSan = nPlayed.san;
+            }
+          }
         }
       } catch {
         // Fallback
@@ -443,6 +486,8 @@ Task: ${modeGuidance}`;
       isBestMove,
       bestMoveSan,
       bestMoveUci,
+      opponentReplySan,
+      bestNextMoveSan,
       isCapture,
       isCheck,
       isCastling,

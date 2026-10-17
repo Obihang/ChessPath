@@ -1,22 +1,10 @@
 import { GoogleGenAI } from '@google/genai';
 import { storageService } from './storageService';
+import { GEMINI_MODELS } from '../constants/aiModels';
+import { pcmToWav, base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
+import { audioCacheService } from './audioCacheService';
 
-// Audio cache for repeated speech lines
-interface CachedVoice {
-  buffer: ArrayBuffer;
-  url: string;
-}
-const audioCache = new Map<string, CachedVoice>();
-
-export function base64ToArrayBuffer(base64: string): ArrayBuffer {
-  const binaryString = atob(base64.replace(/\s/g, ''));
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
+export { base64ToArrayBuffer };
 
 export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'audio/wav'): string {
   const blob = new Blob([buffer], { type: mimeType });
@@ -384,93 +372,174 @@ Keep the tone encouraging, constructive, and inspiring!`;
     text: string,
     customKey?: string
   ): Promise<{ success: boolean; audioUrl?: string; audioBuffer?: ArrayBuffer; error?: string }> {
-    const ai = getGeminiClient(customKey);
-    if (!ai) {
-      return { success: false, error: 'No Gemini API key found. Please paste your key in Settings.' };
-    }
+    const settings = storageService.getSettings();
+    const voiceName = settings.geminiVoice || 'Kore';
+    const cleanText = stripMarkdown(text).slice(0, 500);
 
-    const cleanText = text.replace(/[*_#`]/g, '').trim().slice(0, 500);
     if (!cleanText) {
       return { success: false, error: 'Empty text to speak.' };
     }
 
-    // Check cache
-    if (audioCache.has(cleanText)) {
-      const cached = audioCache.get(cleanText)!;
-      return { success: true, audioUrl: cached.url, audioBuffer: cached.buffer };
+    // 1. Check IndexedDB cache
+    const cachedWav = await audioCacheService.getClip(cleanText, voiceName);
+    if (cachedWav) {
+      const audioUrl = arrayBufferToBlobUrl(cachedWav, 'audio/wav');
+      return { success: true, audioUrl, audioBuffer: cachedWav };
     }
 
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash-lite-tts',
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: cleanText }],
-          },
-        ],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Kore' },
-            },
+    // 2. Initialize Gemini Voice Client (Voice always uses Gemini key)
+    const ai = getGeminiClient(customKey || settings.geminiApiKey);
+    if (!ai) {
+      return { success: false, error: 'NO_KEY: No Gemini API key found for voice features.' };
+    }
+
+    const requestBody = {
+      contents: [{ role: 'user', parts: [{ text: cleanText }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName },
           },
         },
-      });
+      },
+    };
 
-      let base64Audio: string | undefined;
-      let mimeType = 'audio/wav';
+    try {
+      let rawBase64: string | undefined;
+      let modelUsed: string = GEMINI_MODELS.TTS_PRIMARY;
 
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          base64Audio = part.inlineData.data;
-          if (part.inlineData.mimeType) {
-            mimeType = part.inlineData.mimeType;
+      try {
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODELS.TTS_PRIMARY,
+          ...requestBody,
+        });
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        for (const p of parts) {
+          if (p.inlineData?.data) {
+            rawBase64 = p.inlineData.data;
+            break;
           }
-          break;
+        }
+      } catch (primaryErr: any) {
+        const errMsg = primaryErr?.message || '';
+        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('NotFound')) {
+          console.warn(`TTS Model ${GEMINI_MODELS.TTS_PRIMARY} unavailable, retrying with ${GEMINI_MODELS.TTS_FALLBACK}...`);
+          modelUsed = GEMINI_MODELS.TTS_FALLBACK;
+          const fallbackRes = await ai.models.generateContent({
+            model: GEMINI_MODELS.TTS_FALLBACK,
+            ...requestBody,
+          });
+          const parts = fallbackRes.candidates?.[0]?.content?.parts || [];
+          for (const p of parts) {
+            if (p.inlineData?.data) {
+              rawBase64 = p.inlineData.data;
+              break;
+            }
+          }
+        } else {
+          throw primaryErr;
         }
       }
 
-      if (base64Audio) {
-        const buffer = base64ToArrayBuffer(base64Audio);
-        const audioUrl = arrayBufferToBlobUrl(buffer, mimeType);
-        audioCache.set(cleanText, { buffer, url: audioUrl });
-        return { success: true, audioUrl, audioBuffer: buffer };
+      if (!rawBase64) {
+        return {
+          success: false,
+          error: 'Gemini TTS responded without audio data.',
+        };
       }
 
-      return {
-        success: false,
-        error: 'Gemini responded without audio data. The model might be temporarily busy.',
-      };
+      const pcmBuffer = base64ToArrayBuffer(rawBase64);
+      // Convert raw 24kHz 16-bit PCM to standard WAV with RIFF header
+      const wavBuffer = pcmToWav(pcmBuffer, 24000, 1);
+      const audioUrl = arrayBufferToBlobUrl(wavBuffer, 'audio/wav');
+
+      // Cache clip in IndexedDB
+      await audioCacheService.saveClip(cleanText, voiceName, wavBuffer);
+
+      return { success: true, audioUrl, audioBuffer: wavBuffer };
     } catch (e: any) {
-      console.warn('Gemini TTS request error:', e);
+      console.warn('Gemini TTS error:', e);
       let errMsg = e?.message || 'Gemini TTS request failed.';
-      if (errMsg.includes('API key not valid') || errMsg.includes('API_KEY_INVALID')) {
-        errMsg = 'Invalid Gemini API key. Please check your key from Google AI Studio.';
+      if (errMsg.includes('API key not valid') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('401') || errMsg.includes('403')) {
+        errMsg = 'Invalid Gemini API key. Please check your key in Settings.';
       } else if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
-        errMsg = 'Gemini API quota reached. Offline browser voice will be used as fallback.';
-      } else if (errMsg.includes('not found') || errMsg.includes('404')) {
-        errMsg = 'TTS model unavailable with this key. Offline browser voice will be used as fallback.';
+        errMsg = 'Gemini API quota reached (429). Speech paused.';
+      } else if (errMsg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        errMsg = 'Offline / No internet connection.';
       }
-      return {
-        success: false,
-        error: errMsg,
+      return { success: false, error: errMsg };
+    }
+  },
+
+  async transcribeAudio(
+    audioBlob: Blob,
+    customMimeType?: string,
+    customKey?: string
+  ): Promise<{ success: boolean; transcript?: string; error?: string }> {
+    const settings = storageService.getSettings();
+    const ai = getGeminiClient(customKey || settings.geminiApiKey);
+    if (!ai) {
+      return { success: false, error: 'NO_KEY: No Gemini API key found for audio transcription.' };
+    }
+
+    try {
+      const arrayBuf = await audioBlob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64Data = btoa(binary);
+      const mimeType = customMimeType || audioBlob.type || 'audio/webm';
+
+      const promptPart = { text: 'Transcribe exactly, return only the transcript' };
+      const audioPart = {
+        inlineData: {
+          mimeType,
+          data: base64Data,
+        },
       };
+
+      let resultText = '';
+      try {
+        const response = await ai.models.generateContent({
+          model: GEMINI_MODELS.STT_PRIMARY,
+          contents: [{ role: 'user', parts: [audioPart, promptPart] }],
+        });
+        resultText = response.text || '';
+      } catch (primaryErr: any) {
+        const errMsg = primaryErr?.message || '';
+        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('NotFound')) {
+          console.warn(`STT Model ${GEMINI_MODELS.STT_PRIMARY} unavailable, retrying with ${GEMINI_MODELS.STT_FALLBACK}...`);
+          const fallbackRes = await ai.models.generateContent({
+            model: GEMINI_MODELS.STT_FALLBACK,
+            contents: [{ role: 'user', parts: [audioPart, promptPart] }],
+          });
+          resultText = fallbackRes.text || '';
+        } else {
+          throw primaryErr;
+        }
+      }
+
+      const cleanTranscript = stripMarkdown(resultText).replace(/^["']|["']$/g, '').trim();
+      return { success: true, transcript: cleanTranscript };
+    } catch (e: any) {
+      console.warn('Gemini STT error:', e);
+      let errMsg = e?.message || 'Gemini audio transcription failed.';
+      if (errMsg.includes('API key not valid') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('401') || errMsg.includes('403')) {
+        errMsg = 'Invalid Gemini API key. Check key in Settings.';
+      } else if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
+        errMsg = 'Gemini quota reached (429). Please wait a moment.';
+      } else if (errMsg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+        errMsg = 'Offline / No internet connection.';
+      }
+      return { success: false, error: errMsg };
     }
   },
 
   async testVoiceConnection(key?: string): Promise<{ success: boolean; audioUrl?: string; audioBuffer?: ArrayBuffer; error?: string }> {
-    const ai = getGeminiClient(key);
-    if (!ai) {
-      return { success: false, error: 'Please enter a Gemini API key first.' };
-    }
-
-    return this.generateNaturalVoice(
-      'Welcome to ChessPath! Your mentor is ready.',
-      key
-    );
+    return this.generateNaturalVoice('Welcome to ChessPath! Your mentor is ready.', key);
   },
 
   async testProviderConnection(options?: {

@@ -11,6 +11,7 @@ export interface ChessBoardProps {
   showCoordinates?: boolean;
   disabled?: boolean;
   lastMove?: { from: string; to: string } | null;
+  customArrow?: { from: string; to: string; color?: string } | null;
   onMove?: (move: { from: string; to: string; promotion?: string; san?: string }) => void;
 }
 
@@ -57,6 +58,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   showCoordinates = true,
   disabled = false,
   lastMove = null,
+  customArrow = null,
   onMove,
 }) => {
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
@@ -328,6 +330,50 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
               );
             })
           )}
+          {/* Custom Arrow Overlay */}
+          {customArrow && customArrow.from && customArrow.to && (() => {
+            const fCol = FILES.indexOf(customArrow.from[0]);
+            const fRow = 8 - parseInt(customArrow.from[1], 10);
+            const tCol = FILES.indexOf(customArrow.to[0]);
+            const tRow = 8 - parseInt(customArrow.to[1], 10);
+
+            if (fCol < 0 || fRow < 0 || tCol < 0 || tRow < 0) return null;
+
+            const x1 = (isFlipped ? 7 - fCol + 0.5 : fCol + 0.5) * 12.5;
+            const y1 = (isFlipped ? 7 - fRow + 0.5 : fRow + 0.5) * 12.5;
+            const x2 = (isFlipped ? 7 - tCol + 0.5 : tCol + 0.5) * 12.5;
+            const y2 = (isFlipped ? 7 - tRow + 0.5 : tRow + 0.5) * 12.5;
+
+            const arrowColor = customArrow.color || '#f59e0b';
+
+            return (
+              <svg className="absolute inset-0 z-30 w-full h-full pointer-events-none" viewBox="0 0 100 100">
+                <defs>
+                  <marker
+                    id="arrowhead-coach"
+                    markerWidth="6"
+                    markerHeight="6"
+                    refX="5"
+                    refY="3"
+                    orient="auto"
+                  >
+                    <polygon points="0 0, 6 3, 0 6" fill={arrowColor} />
+                  </marker>
+                </defs>
+                <line
+                  x1={`${x1}%`}
+                  y1={`${y1}%`}
+                  x2={`${x2}%`}
+                  y2={`${y2}%`}
+                  stroke={arrowColor}
+                  strokeWidth="3.2"
+                  strokeOpacity="0.88"
+                  strokeLinecap="round"
+                  markerEnd="url(#arrowhead-coach)"
+                />
+              </svg>
+            );
+          })()}
         </div>
       </div>
 
