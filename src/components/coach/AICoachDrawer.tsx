@@ -62,6 +62,7 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
+  const [speechError, setSpeechError] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [conversationMode, setConversationMode] = useState<CoachMode>(settings.coachMode || 'learning');
 
@@ -112,11 +113,13 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
         activeAudioRef.current.pause();
       }
       setIsSpeakingMessageId(null);
+      setSpeechError(null);
     }
   }, [isOpen]);
 
   const speakText = async (msgId: string, text: string) => {
     speechService.unlock();
+    setSpeechError(null);
     if (isSpeakingMessageId === msgId) {
       speechService.stop('User clicked to stop message audio');
       setIsSpeakingMessageId(null);
@@ -125,13 +128,19 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
 
     setIsSpeakingMessageId(msgId);
 
-    await speechService.speakWithCoach(text, settings, {
+    const res = await speechService.speakWithCoach(text, settings, {
       onStart: () => setIsSpeakingMessageId(msgId),
       onEnd: () => setIsSpeakingMessageId(null),
-      onError: (err) => {
+      onError: (err: any) => {
         setIsSpeakingMessageId(null);
+        setSpeechError(err?.message || 'Speech playback failed');
       },
     });
+
+    if (!res.success && res.error) {
+      setIsSpeakingMessageId(null);
+      setSpeechError(res.error);
+    }
   };
 
   const handleSendMessage = async (textToSend: string) => {
@@ -155,7 +164,12 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
       try {
         const evalInfo = await engineService.evaluate(currentFen, 300);
         if (evalInfo && evalInfo.bestMove) {
-          evalContext = ` Engine analysis: evaluation is ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp, best move is ${evalInfo.bestMove}.`;
+          const evalStr = evalInfo.mate !== null
+            ? `mate in ${Math.abs(evalInfo.mate)}`
+            : evalInfo.score !== null
+            ? `${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
+            : 'unrated';
+          evalContext = ` Engine analysis: evaluation is ${evalStr}, best move is ${evalInfo.bestMoveSan || evalInfo.bestMove}.`;
         }
       } catch {
         // Continue if evaluation times out
@@ -202,7 +216,13 @@ Strict instructions:
         try {
           const evalInfo = await engineService.evaluate(currentFen, 400);
           if (evalInfo && evalInfo.bestMove) {
-            engineSuggestion = `Stockfish 19 Analysis: Recommended move is ${evalInfo.bestMove} (eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp).\n\n💡 Tip: Paste your API key (Groq, OpenRouter, Bytez, or Gemini) in Settings for conversational AI chat!`;
+            const engineName = evalInfo.source === 'stockfish' && evalInfo.isAvailable ? 'Stockfish 19' : 'Engine';
+            const evalStr = evalInfo.mate !== null
+              ? `mate in ${Math.abs(evalInfo.mate)}`
+              : evalInfo.score !== null
+              ? `eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
+              : 'tactical assessment';
+            engineSuggestion = `${engineName} Analysis: Recommended move is ${evalInfo.bestMoveSan || evalInfo.bestMove} (${evalStr}).\n\n💡 Tip: Paste your API key (Groq, OpenRouter, Bytez, or Gemini) in Settings for conversational AI chat!`;
           } else {
             engineSuggestion = 'No API key set. Paste your Groq, OpenRouter, Bytez, or Gemini API key in Settings to unlock conversational AI chat!';
           }
@@ -413,6 +433,19 @@ Strict instructions:
               className="text-[11px] font-bold underline hover:text-amber-200"
             >
               Settings
+            </button>
+          </div>
+        )}
+
+        {/* Speech Error Banner */}
+        {speechError && (
+          <div className="px-4 py-2 bg-rose-500/15 border-b border-rose-500/30 flex items-center justify-between text-xs text-rose-300 animate-in fade-in duration-150">
+            <span className="truncate">⚠️ Voice failed: {speechError}</span>
+            <button
+              onClick={() => setSpeechError(null)}
+              className="p-1 hover:text-rose-100 rounded cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}

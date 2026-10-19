@@ -14,6 +14,7 @@ export interface LiveCommentaryCardProps {
   onRepeat?: () => void;
   onShowBetterMove?: (from: string, to: string) => void;
   isRateLimited?: boolean;
+  error?: string | null;
 }
 
 export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
@@ -27,6 +28,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   onRepeat,
   onShowBetterMove,
   isRateLimited = false,
+  error = null,
 }) => {
   if (!comment) return null;
 
@@ -89,6 +91,14 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
         <p className="text-xs text-slate-200 leading-relaxed font-medium">
           {comment}
         </p>
+
+        {/* Visible failure feedback */}
+        {error && (
+          <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded-md font-medium pt-0.5 flex items-center gap-1.5">
+            <span className="shrink-0 text-rose-400">⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
 
         {/* Rate limit warning if active */}
         {isRateLimited && (

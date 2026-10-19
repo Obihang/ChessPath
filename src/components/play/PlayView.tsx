@@ -76,6 +76,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const {
     latestComment,
     commentFacts,
+    coachError,
     isMuted: isCoachMuted,
     isAnalyzing: isCoachAnalyzing,
     precomputeTurn,
@@ -332,7 +333,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
     try {
       const best = await engineService.getBestMove(currGame.fen(), difficulty);
       const used = engineService.getLastEngineUsed();
-      setActiveEngine(used);
+      setActiveEngine(used === 'minimax' ? 'minimax' : 'stockfish');
       if (used === 'minimax') {
         setFallbackNotice('Stockfish timed out; turn played via Minimax fallback');
         setTimeout(() => setFallbackNotice(null), 4000);
@@ -460,7 +461,16 @@ export const PlayView: React.FC<PlayViewProps> = ({
           side
         );
       } else if (evalInfo && evalInfo.bestMove) {
-        hintText = `Stockfish 19 Recommendation: Best move is ${evalInfo.bestMove} (eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp). Focus on controlling the center and active piece placement!`;
+        if (evalInfo.source === 'stockfish' && evalInfo.isAvailable) {
+          const evalStr = evalInfo.mate !== null
+            ? `mate in ${Math.abs(evalInfo.mate)}`
+            : evalInfo.score !== null
+            ? `${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
+            : 'evaluated';
+          hintText = `Stockfish 19 Recommendation: Best move is ${evalInfo.bestMoveSan || evalInfo.bestMove} (eval: ${evalStr}). Focus on controlling the center and active piece placement!`;
+        } else {
+          hintText = `Engine suggestion: Consider playing ${evalInfo.bestMoveSan || evalInfo.bestMove}. Focus on controlling key squares and active piece placement!`;
+        }
       } else {
         hintText = 'Focus on piece activity: look for undefended pieces, forced checks, and double attacks!';
       }
@@ -662,6 +672,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           onToggleMute={toggleCoachMute}
           mode={settings.coachMode}
           facts={commentFacts}
+          error={coachError}
           onOpenCoach={onOpenCoach}
           onDismiss={dismissCoachComment}
           onRepeat={repeatCoachComment}

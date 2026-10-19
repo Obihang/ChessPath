@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "validate": "tsx src/utils/validateContent.ts"
+    "validate": "tsx src/utils/validateContent.ts",
+    "test:engine": "tsx scripts/testEngine.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

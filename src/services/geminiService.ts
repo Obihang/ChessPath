@@ -11,18 +11,43 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
   return URL.createObjectURL(blob);
 }
 
-function getActiveApiKey(customKey?: string): string {
+/**
+ * Resolves the client-side API key for Gemini features (Voice TTS / STT, and Gemini text).
+ * Does NOT pick up third-party text provider keys (Groq, OpenRouter, OpenAI, etc.).
+ * Stored locally in user's browser settings.
+ */
+export function getGeminiVoiceApiKey(customKey?: string): string {
   const settings = storageService.getSettings();
   const envKey =
     (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
     (typeof process !== 'undefined' && process.env ? process.env.GEMINI_API_KEY : '') ||
     '';
-  const rawKey = (customKey || settings.aiApiKey || settings.geminiApiKey || envKey || '').trim();
+  const rawKey = (customKey || settings.geminiApiKey || (settings.aiProvider === 'gemini' ? settings.aiApiKey : '') || envKey || '').trim();
   return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
 }
 
+/**
+ * Resolves the client-side API key for the currently configured text AI provider.
+ */
+export function getTextProviderApiKey(customKey?: string): string {
+  const settings = storageService.getSettings();
+  const provider = settings.aiProvider || 'gemini';
+  if (provider === 'gemini') {
+    return getGeminiVoiceApiKey(customKey);
+  }
+  const rawKey = (customKey || settings.aiApiKey || '').trim();
+  return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
+}
+
+/**
+ * Backward compatibility helper for general callers.
+ */
+export function getActiveApiKey(customKey?: string): string {
+  return getTextProviderApiKey(customKey);
+}
+
 function getGeminiClient(customKey?: string): GoogleGenAI | null {
-  const apiKey = getActiveApiKey(customKey);
+  const apiKey = getGeminiVoiceApiKey(customKey);
   if (!apiKey) {
     return null;
   }
@@ -53,7 +78,7 @@ async function callOpenAICompatible(
 ): Promise<string> {
   const settings = storageService.getSettings();
   const provider = settings.aiProvider || 'gemini';
-  const apiKey = getActiveApiKey();
+  const apiKey = getTextProviderApiKey();
   if (!apiKey) {
     throw new Error('NO_KEY');
   }
@@ -144,7 +169,19 @@ async function callOpenAICompatible(
 export const geminiService = {
   hasKey(): boolean {
     const settings = storageService.getSettings();
-    return !!(settings.aiApiKey || settings.geminiApiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : ''));
+    const provider = settings.aiProvider || 'gemini';
+    if (provider === 'gemini') {
+      return !!getGeminiVoiceApiKey();
+    }
+    return !!getTextProviderApiKey();
+  },
+
+  hasGeminiVoiceKey(): boolean {
+    return !!getGeminiVoiceApiKey();
+  },
+
+  hasTextProviderKey(): boolean {
+    return !!getTextProviderApiKey();
   },
 
   async explainPosition(fen: string, moveHistory: string[] = []): Promise<string> {

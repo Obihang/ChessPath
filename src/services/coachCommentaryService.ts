@@ -31,6 +31,7 @@ export interface MoveFacts {
   gamePhase: 'opening' | 'middlegame' | 'endgame';
   isPhaseChange?: boolean;
   evalSwing: number;
+  isEvalAvailable?: boolean;
 }
 
 export interface CommentaryResult {
@@ -70,7 +71,7 @@ export function getMoveTimingLogs(): MoveTimingDiagnostic[] {
 
 // In-memory cache by FEN + mode
 const commentaryCache = new Map<string, string>();
-const precomputeCache = new Map<string, { score: number; bestMoveUci: string }>();
+const precomputeCache = new Map<string, { score: number | null; bestMoveUci: string }>();
 
 // 429 cooldown state
 let rateLimitedUntil = 0;
@@ -87,10 +88,12 @@ export const coachCommentaryService = {
     if (precomputeCache.has(fen)) return;
     try {
       const res = await engineService.evaluate(fen, 250);
-      precomputeCache.set(fen, { score: res.score, bestMoveUci: res.bestMove || '' });
-      if (precomputeCache.size > 10) {
-        const oldestKey = Array.from(precomputeCache.keys())[0];
-        precomputeCache.delete(oldestKey);
+      if (res.isAvailable) {
+        precomputeCache.set(fen, { score: res.score, bestMoveUci: res.bestMove || '' });
+        if (precomputeCache.size > 10) {
+          const oldestKey = Array.from(precomputeCache.keys())[0];
+          precomputeCache.delete(oldestKey);
+        }
       }
     } catch {
       // Ignored
@@ -195,8 +198,8 @@ export const coachCommentaryService = {
     mode: CoachMode,
     isPlayerMove: boolean
   ): Promise<CommentaryResult | null> {
-    // 1. Check mode silence rule
-    if (!this.shouldModeComment(mode, facts, isPlayerMove)) {
+    // 1. Check mode silence rule for opponent moves
+    if (!isPlayerMove && !this.shouldModeComment(mode, facts, isPlayerMove)) {
       return null;
     }
 
@@ -252,16 +255,16 @@ export const coachCommentaryService = {
     let modeGuidance = '';
     switch (mode) {
       case 'learning':
-        modeGuidance = `Verdict (${facts.classification}) plus one short idea. Max 2 sentences and 30 words.`;
+        modeGuidance = `Explain what the move did or why it was good or bad, and when relevant what to do next. Max 2 sentences and 30 words. Do NOT repeat or say the verdict word ("${facts.classification}").`;
         break;
       case 'criticizing':
-        modeGuidance = `Direct tone, max 25 words. Name better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'key tactic'}) if one exists.`;
+        modeGuidance = `Direct, critical tone, max 25 words. Point out the weakness and name the better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'alternative idea'}) if one exists. Do NOT repeat the verdict word ("${facts.classification}").`;
         break;
       case 'simple':
-        modeGuidance = `Ultra short plain comment, max 12 words. Example: "Good move, you developed a knight."`;
+        modeGuidance = `Ultra-short, plain observation of what the move did, max 12 words. Do NOT repeat the verdict word. Example: "You developed a knight toward the center."`;
         break;
       case 'competitive':
-        modeGuidance = `Terse evaluation-based comment, max 15 words.`;
+        modeGuidance = `Terse evaluation-based comment, max 15 words. State the balance shift or threat concisely. Do NOT repeat the verdict word.`;
         break;
     }
 
@@ -271,7 +274,8 @@ Rules:
 1. Output PLAIN TEXT ONLY. Absolutely NO markdown, NO asterisks, NO bolding, NO bullet points.
 2. Max ${maxSentences} short sentences.
 3. ${moveNamingInstruction}
-4. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts.`;
+4. Do NOT repeat the verdict word ("${facts.classification}", "Great move", "Good move", "Inaccuracy", "Mistake", "Blunder") because the spoken verdict was already played.
+5. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts.`;
 
     const userPrompt = `Engine Facts:
 - Move played: ${facts.moveSan} by ${mover}
@@ -362,15 +366,20 @@ Task: ${modeGuidance}`;
 
     // 1. Evaluate position before the move (using precalculated result if available)
     let evalBefore = 0;
+    let evalBeforeAvailable = false;
     let bestMoveUci = '';
     const precomputed = precomputeCache.get(previousFen);
-    if (precomputed) {
+    if (precomputed && precomputed.score !== null) {
       evalBefore = precomputed.score;
+      evalBeforeAvailable = true;
       bestMoveUci = precomputed.bestMoveUci;
     } else {
       try {
         const beforeRes = await engineService.evaluate(previousFen, 250);
-        evalBefore = beforeRes.score;
+        if (beforeRes.isAvailable && beforeRes.score !== null) {
+          evalBefore = beforeRes.score;
+          evalBeforeAvailable = true;
+        }
         bestMoveUci = beforeRes.bestMove || '';
       } catch (e) {
         console.warn('Evaluation before move failed:', e);
@@ -378,21 +387,25 @@ Task: ${modeGuidance}`;
     }
 
     // 2. Evaluate position after the move & get opponent's best reply
-    let evalAfter = 0;
+    let evalAfter = evalBefore;
+    let evalAfterAvailable = false;
     let opponentReplyUci = '';
     try {
       const afterRes = await engineService.evaluate(currentFen, 250);
-      // In currentFen, it is the opponent's turn. Negate score to keep mover's perspective.
-      evalAfter = -afterRes.score;
+      if (afterRes.isAvailable && afterRes.score !== null) {
+        // In currentFen, it is the opponent's turn. Negate score to keep mover's perspective.
+        evalAfter = -afterRes.score;
+        evalAfterAvailable = true;
+      }
       opponentReplyUci = afterRes.bestMove || '';
     } catch (e) {
       console.warn('Evaluation after move failed:', e);
-      evalAfter = evalBefore;
     }
 
     // 3. Centipawn loss and eval swing
-    const cpLoss = Math.max(0, evalBefore - evalAfter);
-    const evalSwing = Math.abs(evalAfter - evalBefore);
+    const cpLoss = evalBeforeAvailable && evalAfterAvailable ? Math.max(0, evalBefore - evalAfter) : 0;
+    const evalSwing = evalBeforeAvailable && evalAfterAvailable ? Math.abs(evalAfter - evalBefore) : 0;
+    const isEvalAvailable = evalBeforeAvailable && evalAfterAvailable;
 
     // 4. Was it the engine's best move?
     const isBestMove = !!(bestMoveUci && bestMoveUci.toLowerCase() === playedUci);
@@ -483,6 +496,7 @@ Task: ${modeGuidance}`;
       gamePhase,
       isPhaseChange,
       evalSwing,
+      isEvalAvailable,
     };
   },
 

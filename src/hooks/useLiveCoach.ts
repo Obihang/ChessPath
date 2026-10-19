@@ -12,6 +12,7 @@ export interface UseLiveCoachOptions {
 export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: UseLiveCoachOptions) {
   const [latestComment, setLatestComment] = useState<string | null>(null);
   const [commentFacts, setCommentFacts] = useState<MoveFacts | null>(null);
+  const [coachError, setCoachError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
 
@@ -30,7 +31,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   /**
    * Process a live move executed during gameplay.
-   * Gives instant verdict badge & audio phrase, followed by streaming AI explanation.
+   * Gives instant verdict badge & audio phrase, followed by AI explanation.
    */
   const processMove = useCallback(
     async (
@@ -56,6 +57,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         currentSeq = ++playerMoveSeqRef.current;
         // Stop previous speech smoothly ONLY when player makes their next move
         speechService.stop('Player executed next move');
+        setCoachError(null);
       }
 
       setIsAnalyzing(true);
@@ -86,14 +88,12 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           speechService.speakVerdictInstant(facts.classification, settings).catch(() => {});
         }
 
-        // Check if this mode should generate commentary
-        const shouldComment = coachCommentaryService.shouldModeComment(
+        // Check if this mode should generate commentary (opponent moves only)
+        if (!isPlayerMove && !coachCommentaryService.shouldModeComment(
           settings.coachMode,
           facts,
           isPlayerMove
-        );
-
-        if (!shouldComment) {
+        )) {
           setIsAnalyzing(false);
           return;
         }
@@ -117,27 +117,21 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           setCommentFacts(commentaryResult.facts);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 5. TTS AI Explanation (Streaming or Unary based on settings.streamingVoice)
+          // 5. Speech Dispatch via Universal Speech Dispatcher
           let firstAudioMs = 0;
           if (settings.voiceEnabled && !isMuted) {
-            if (settings.streamingVoice) {
-              const speechRes = await speechService.speakWithCoachStream(commentaryResult.comment, settings, {
-                onFirstAudio: (timeToFirst) => {
-                  firstAudioMs = timeToFirst;
-                },
-              });
-              if (!firstAudioMs) {
-                firstAudioMs = speechRes.timeToFirstAudioMs;
-              }
-              if (speechRes.error) {
-                speechService.logDiagnostic('error', `Voice failed: ${speechRes.error}`);
-              }
+            const speechRes = await speechService.speakWithCoach(commentaryResult.comment, settings, {
+              onFirstAudio: (timeToFirst) => {
+                firstAudioMs = timeToFirst;
+              },
+            });
+            if (speechRes.timeToFirstAudioMs) {
+              firstAudioMs = speechRes.timeToFirstAudioMs;
+            }
+            if (!speechRes.success && speechRes.error) {
+              setCoachError(`Voice failed: ${speechRes.error}`);
             } else {
-              const speechRes = await speechService.speakWithCoach(commentaryResult.comment, settings);
-              firstAudioMs = 1200;
-              if (speechRes.error) {
-                speechService.logDiagnostic('error', `Voice failed: ${speechRes.error}`);
-              }
+              setCoachError(null);
             }
           }
 
@@ -152,8 +146,9 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
             timestamp: new Date().toLocaleTimeString(),
           });
         }
-      } catch (err) {
+      } catch (err: any) {
         console.warn('useLiveCoach processMove error:', err);
+        setCoachError(err?.message || 'Explanation failed');
       } finally {
         if (!isPlayerMove || currentSeq === playerMoveSeqRef.current) {
           setIsAnalyzing(false);
@@ -176,11 +171,12 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
   const dismissComment = useCallback(() => {
     setLatestComment(null);
     setCommentFacts(null);
+    setCoachError(null);
   }, []);
 
   const repeatComment = useCallback(() => {
     if (latestComment && settings.voiceEnabled) {
-      speechService.speakWithCoachStream(latestComment, settings);
+      speechService.speakWithCoach(latestComment, settings);
     }
   }, [latestComment, settings]);
 
@@ -189,12 +185,14 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     setIsAnalyzing(false);
     setLatestComment(null);
     setCommentFacts(null);
+    setCoachError(null);
     lastPhaseRef.current = 'opening';
   }, []);
 
   return {
     latestComment,
     commentFacts,
+    coachError,
     isMuted,
     isAnalyzing,
     precomputeTurn,
@@ -204,5 +202,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     repeatComment,
     resetCoach,
     setLatestComment,
+    setCoachError,
   };
 }

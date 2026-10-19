@@ -3,7 +3,7 @@ import { AppSettings, AIProviderId, BoardThemeId } from '../../types/chess';
 import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import { storageService } from '../../services/storageService';
-import { geminiService } from '../../services/geminiService';
+import { geminiService, getGeminiVoiceApiKey } from '../../services/geminiService';
 import { getMoveTimingLogs, coachCommentaryService } from '../../services/coachCommentaryService';
 import { GEMINI_PREBUILT_VOICES } from '../../constants/aiModels';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
@@ -207,12 +207,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleApiKeyChange = (newKey: string) => {
     const trimmed = newKey.trim();
-    const autoEnableNatural = trimmed.length > 0 && !localSettings.useNaturalVoice && localSettings.aiProvider === 'gemini';
+    let updated: AppSettings;
+    if (localSettings.aiProvider === 'gemini') {
+      const autoEnableNatural = trimmed.length > 0 && !localSettings.useNaturalVoice;
+      updated = {
+        ...localSettings,
+        geminiApiKey: trimmed,
+        aiApiKey: trimmed,
+        useNaturalVoice: autoEnableNatural ? true : localSettings.useNaturalVoice,
+      };
+    } else {
+      updated = {
+        ...localSettings,
+        aiApiKey: trimmed,
+      };
+    }
+    setLocalSettings(updated);
+    storageService.saveSettings(updated);
+    onUpdateSettings(updated);
+    setVoiceTestStatus(null);
+  };
+
+  const handleGeminiVoiceKeyChange = (newKey: string) => {
+    const trimmed = newKey.trim();
     const updated: AppSettings = {
       ...localSettings,
-      aiApiKey: trimmed,
       geminiApiKey: trimmed,
-      useNaturalVoice: autoEnableNatural ? true : localSettings.useNaturalVoice,
+      ...(localSettings.aiProvider === 'gemini' ? { aiApiKey: trimmed } : {}),
     };
     setLocalSettings(updated);
     storageService.saveSettings(updated);
@@ -240,11 +261,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
 
-    const keyToTest = (localSettings.geminiApiKey || localSettings.aiApiKey)?.trim();
+    const keyToTest = (localSettings.geminiApiKey || (localSettings.aiProvider === 'gemini' ? localSettings.aiApiKey : ''))?.trim() || getGeminiVoiceApiKey();
     if (!keyToTest) {
       setVoiceTestStatus({
         type: 'error',
-        message: 'No Gemini API key set. Please enter your key in the AI API Key section below.',
+        message: 'No Gemini API key configured. Please enter a valid Gemini key for natural voice.',
       });
       return;
     }
@@ -304,7 +325,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       message: 'Recording 3 seconds from microphone to test Gemini STT...',
     });
     try {
-      const res = await speechService.testMicrophone(localSettings.geminiApiKey || localSettings.aiApiKey);
+      const res = await speechService.testMicrophone(localSettings.geminiApiKey);
       if (res.success) {
         setVoiceTestStatus({
           type: 'success',
@@ -509,6 +530,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* Additional Settings */}
                 <div className="space-y-2 pt-2 border-t border-slate-800/80">
                   <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-slate-300">Natural voice (Gemini TTS)</span>
+                      <p className="text-[10px] text-slate-500">Uncheck to use device browser speech synthesis</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={localSettings.useNaturalVoice ?? true}
+                      onChange={(e) => handleChange('useNaturalVoice', e.target.checked)}
+                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
                     <span className="text-slate-300">Reveal better move names</span>
                     <input
                       type="checkbox"
@@ -535,6 +568,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
                     />
                   </div>
+
+                  {localSettings.aiProvider !== 'gemini' && localSettings.useNaturalVoice && (
+                    <div className="space-y-1 pt-2 border-t border-slate-800/80">
+                      <label className="text-slate-400 font-medium">Gemini Voice API Key</label>
+                      <input
+                        type={showKey ? 'text' : 'password'}
+                        value={localSettings.geminiApiKey || ''}
+                        onChange={(e) => handleGeminiVoiceKeyChange(e.target.value)}
+                        placeholder="AIzaSy... (for Gemini Natural Voice & STT)"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
+                      />
+                      <p className="text-[10px] text-slate-500">Allows Natural Voice while using {localSettings.aiProvider.toUpperCase()} for chat.</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Voice & Microphone Test Action Buttons */}
@@ -688,7 +735,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="relative">
                   <input
                     type={showKey ? 'text' : 'password'}
-                    value={localSettings.aiApiKey || localSettings.geminiApiKey || ''}
+                    value={localSettings.aiProvider === 'gemini' ? (localSettings.geminiApiKey || localSettings.aiApiKey || '') : (localSettings.aiApiKey || '')}
                     onChange={(e) => handleApiKeyChange(e.target.value)}
                     placeholder={
                       localSettings.aiProvider === 'gemini'
@@ -707,6 +754,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Local credential: Your key is stored solely on your device in your browser's private localStorage and is never sent to any shared server.
+                </p>
               </div>
 
               {/* Custom Base URL & Model Name for non-Gemini providers */}

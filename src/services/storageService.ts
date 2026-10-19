@@ -49,7 +49,20 @@ export const storageService = {
     try {
       const data = localStorage.getItem(SETTINGS_KEY);
       if (data) {
-        return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+        const parsed = JSON.parse(data);
+        const settings: AppSettings = { ...DEFAULT_SETTINGS, ...parsed };
+
+        // Safe migration: preserve legacy saved Gemini keys without overwriting other provider keys
+        if (
+          (!settings.geminiApiKey || !settings.geminiApiKey.trim()) &&
+          (!settings.aiProvider || settings.aiProvider === 'gemini') &&
+          settings.aiApiKey &&
+          settings.aiApiKey.trim()
+        ) {
+          settings.geminiApiKey = settings.aiApiKey.trim();
+        }
+
+        return settings;
       }
     } catch (e) {
       console.warn('Failed to load settings from localStorage', e);
