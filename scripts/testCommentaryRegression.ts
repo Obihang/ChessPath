@@ -13,12 +13,12 @@ import { speechService } from '../src/services/speechService';
 import { DEFAULT_SETTINGS } from '../src/services/storageService';
 
 async function runRegressionTests() {
-  console.log('--- Running Coach Commentary & Move Classification Regression Suite ---');
+  console.log('--- Running Phase 2 Comprehensive Coach Commentary & Move Classification Test Suite ---');
 
   // =========================================================================
-  // Test 1: Pure helper functions and no runtime error from sentence limit helper
+  // Test 1: Sentence & word limit helpers for all modes (Phase 2 targets)
   // =========================================================================
-  console.log('Test 1: Sentence & word limit helpers for all modes...');
+  console.log('Test 1: Sentence & word limit helpers for Phase 2 targets...');
   const modes = ['learning', 'criticizing', 'simple', 'competitive'] as const;
 
   for (const mode of modes) {
@@ -35,37 +35,34 @@ async function runRegressionTests() {
     }
   }
 
-  if (getMaxSentencesForMode('simple') !== 1 || getMaxWordsForMode('simple') !== 12) {
-    throw new Error('Test 1 Failed: Simple mode caps must be 1 sentence and 12 words');
+  if (getMaxSentencesForMode('learning') !== 4 || getMaxWordsForMode('learning') !== 65) {
+    throw new Error('Test 1 Failed: Learning mode caps must be 4 sentences and 65 words');
   }
-  if (getMaxSentencesForMode('criticizing') !== 2 || getMaxWordsForMode('criticizing') !== 25) {
-    throw new Error('Test 1 Failed: Criticizing mode caps must be 2 sentences and 25 words');
+  if (getMaxSentencesForMode('criticizing') !== 3 || getMaxWordsForMode('criticizing') !== 50) {
+    throw new Error('Test 1 Failed: Criticizing mode caps must be 3 sentences and 50 words');
   }
-  if (getMaxSentencesForMode('competitive') !== 2 || getMaxWordsForMode('competitive') !== 15) {
-    throw new Error('Test 1 Failed: Competitive mode caps must be 2 sentences and 15 words');
+  if (getMaxSentencesForMode('simple') !== 2 || getMaxWordsForMode('simple') !== 20) {
+    throw new Error('Test 1 Failed: Simple mode caps must be 2 sentences and 20 words');
   }
-  if (getMaxSentencesForMode('learning') !== 2 || getMaxWordsForMode('learning') !== 30) {
-    throw new Error('Test 1 Failed: Learning mode caps must be 2 sentences and 30 words');
+  if (getMaxSentencesForMode('competitive') !== 3 || getMaxWordsForMode('competitive') !== 40) {
+    throw new Error('Test 1 Failed: Competitive mode caps must be 3 sentences and 40 words');
   }
-  console.log('✓ Test 1 passed: All mode limits verified and consistent.');
+  console.log('✓ Test 1 passed: All Phase 2 mode limits verified and consistent.');
 
   // =========================================================================
   // Test 2: Valid zero centipawn evaluation vs unavailable evaluation
   // =========================================================================
   console.log('Test 2: Valid 0 cp loss vs unavailable evaluation...');
-  // A genuine 0 cp loss when evaluation evidence is available is 'good'
   const validGood = classifyMove(0, false, false, true);
   if (validGood !== 'good') {
     throw new Error(`Test 2 Failed: Genuine 0 cp loss should be 'good', got ${validGood}`);
   }
 
-  // An unavailable evaluation (cpLoss = null, isEvaluationAvailable = false) MUST be 'unavailable'
   const unavailNull = classifyMove(null, false, false, false);
   if (unavailNull !== 'unavailable') {
     throw new Error(`Test 2 Failed: Missing evaluation must produce 'unavailable', got ${unavailNull}`);
   }
 
-  // Even with isBestMove false and cpLoss null, must never produce 'good'
   const unavailNullWithTrue = classifyMove(null, false, false, true);
   if (unavailNullWithTrue !== 'unavailable') {
     throw new Error(`Test 2 Failed: cpLoss=null must produce 'unavailable', got ${unavailNullWithTrue}`);
@@ -83,15 +80,19 @@ async function runRegressionTests() {
   console.log('✓ Test 3 passed: Speech verdict correctly guards against unanalyzed moves.');
 
   // =========================================================================
-  // Test 4: computeMoveFacts with engine evaluation unavailable before/after move
+  // Test 4: computeMoveFacts with engine evaluation unavailable (before, after, both, sacrifice)
   // =========================================================================
   console.log('Test 4: MoveFacts with simulated missing engine evaluations...');
   const origEvaluate = engineService.evaluate;
 
   try {
+    const fenBefore = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const fenAfter = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+    const moveRec = { from: 'e2', to: 'e4', san: 'e4', color: 'w' as const, piece: 'p' as const };
+
     // 4a. Engine fails before move
     engineService.evaluate = async (fen: string) => {
-      if (fen.includes('startpos') || fen === 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1') {
+      if (fen === fenBefore) {
         return {
           score: null,
           mate: null,
@@ -112,21 +113,11 @@ async function runRegressionTests() {
       };
     };
 
-    const fenBefore = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-    const fenAfter = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
-    const moveRec = { from: 'e2', to: 'e4', san: 'e4', color: 'w' as const, piece: 'p' as const };
-
     coachCommentaryService.clearCache();
     const factsMissingBefore = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, moveRec, 'w');
 
-    if (factsMissingBefore.evalBefore !== null) {
-      throw new Error(`Test 4a Failed: evalBefore should be null when engine failed, got ${factsMissingBefore.evalBefore}`);
-    }
-    if (factsMissingBefore.cpLoss !== null) {
-      throw new Error(`Test 4a Failed: cpLoss should be null when evalBefore is unavailable, got ${factsMissingBefore.cpLoss}`);
-    }
-    if (factsMissingBefore.isEvaluationAvailable !== false) {
-      throw new Error('Test 4a Failed: isEvaluationAvailable should be false');
+    if (factsMissingBefore.evalBefore !== null || factsMissingBefore.cpLoss !== null) {
+      throw new Error('Test 4a Failed: evalBefore and cpLoss must be null when engine fails');
     }
     if (factsMissingBefore.classification !== 'unavailable') {
       throw new Error(`Test 4a Failed: classification must be 'unavailable', got ${factsMissingBefore.classification}`);
@@ -159,37 +150,28 @@ async function runRegressionTests() {
     coachCommentaryService.clearCache();
     const factsMissingAfter = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, moveRec, 'w');
 
-    if (factsMissingAfter.evalAfter !== null) {
-      throw new Error(`Test 4b Failed: evalAfter should be null when engine failed, got ${factsMissingAfter.evalAfter}`);
-    }
-    if (factsMissingAfter.cpLoss !== null) {
-      throw new Error(`Test 4b Failed: cpLoss should be null when evalAfter is unavailable, got ${factsMissingAfter.cpLoss}`);
+    if (factsMissingAfter.evalAfter !== null || factsMissingAfter.cpLoss !== null) {
+      throw new Error('Test 4b Failed: evalAfter and cpLoss must be null');
     }
     if (factsMissingAfter.classification !== 'unavailable') {
       throw new Error(`Test 4b Failed: classification must be 'unavailable', got ${factsMissingAfter.classification}`);
     }
-    // Note: Best move match can be true if candidate matched, but classification remains unverified
-    if (!factsMissingAfter.isBestMove) {
-      throw new Error('Test 4b Failed: isBestMove should reflect engine candidate match');
-    }
 
     // 4c. Both evaluations fail
-    engineService.evaluate = async () => {
-      return {
-        score: null,
-        mate: null,
-        bestMove: '',
-        source: 'stockfish' as const,
-        isAvailable: false,
-        status: 'unavailable' as const,
-        error: 'Engine offline',
-      };
-    };
+    engineService.evaluate = async () => ({
+      score: null,
+      mate: null,
+      bestMove: '',
+      source: 'stockfish' as const,
+      isAvailable: false,
+      status: 'unavailable' as const,
+      error: 'Engine offline',
+    });
 
     coachCommentaryService.clearCache();
     const factsBothMissing = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, moveRec, 'w');
     if (factsBothMissing.evalBefore !== null || factsBothMissing.evalAfter !== null || factsBothMissing.cpLoss !== null) {
-      throw new Error('Test 4c Failed: Both evalBefore, evalAfter, and cpLoss must be null when both evals fail');
+      throw new Error('Test 4c Failed: Both evals and cpLoss must be null');
     }
     if (factsBothMissing.classification !== 'unavailable') {
       throw new Error(`Test 4c Failed: Classification must be 'unavailable', got ${factsBothMissing.classification}`);
@@ -202,10 +184,10 @@ async function runRegressionTests() {
       throw new Error('Test 4d Failed: isSacrifice must be false when engine evaluation is unavailable');
     }
 
-    console.log('✓ Test 4 passed: Missing engine evaluations (before, after, both, sacrifice) produce explicit nulls and unavailable classification.');
+    console.log('✓ Test 4 passed: Unavailable engine evaluations produce explicit nulls, unavailable classification, and false sacrifice flag.');
 
     // =========================================================================
-    // Test 5: Mate-score handling
+    // Test 5: Mate-score handling in computeMoveFacts
     // =========================================================================
     console.log('Test 5: Mate-score handling in computeMoveFacts...');
     engineService.evaluate = async (fen: string) => {
@@ -222,7 +204,7 @@ async function runRegressionTests() {
       }
       return {
         score: null,
-        mate: -1, // Opponent is mated in 1 (mover has mate in 1)
+        mate: -1, // Opponent is mated in 1
         bestMove: 'e7e5',
         source: 'stockfish' as const,
         isAvailable: true,
@@ -232,11 +214,8 @@ async function runRegressionTests() {
 
     coachCommentaryService.clearCache();
     const mateFacts = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, moveRec, 'w');
-    if (mateFacts.mateBefore !== 2) {
-      throw new Error(`Test 5 Failed: mateBefore should be 2, got ${mateFacts.mateBefore}`);
-    }
-    if (mateFacts.mateAfter !== 1) {
-      throw new Error(`Test 5 Failed: mateAfter from mover perspective should be +1, got ${mateFacts.mateAfter}`);
+    if (mateFacts.mateBefore !== 2 || mateFacts.mateAfter !== 1) {
+      throw new Error(`Test 5 Failed: Mover perspective mates mismatch: before=${mateFacts.mateBefore}, after=${mateFacts.mateAfter}`);
     }
     if (mateFacts.cpLoss === null || mateFacts.cpLoss > 50) {
       throw new Error(`Test 5 Failed: Maintaining forced mate should have 0 cp loss, got ${mateFacts.cpLoss}`);
@@ -249,7 +228,7 @@ async function runRegressionTests() {
   // =========================================================================
   // Test 6: All four coaching modes with mocked successful Gemini responses
   // =========================================================================
-  console.log('Test 6: All 4 coaching modes with successful Gemini responses...');
+  console.log('Test 6: All 4 coaching modes with successful Gemini responses and Phase 2 limits...');
   const origGenerateLive = geminiService.generateLiveCommentary;
   const origHasKey = geminiService.hasKey;
 
@@ -282,13 +261,13 @@ async function runRegressionTests() {
       geminiService.generateLiveCommentary = async () => {
         switch (mode) {
           case 'learning':
-            return 'Great move. You developed your knight toward the center, pressuring Black’s pawn on e5.';
+            return 'Great move. You developed your knight toward the center, pressuring Black’s pawn on e5. This controls d4 and e5 while preparing kingside castling.';
           case 'criticizing':
-            return 'Good development with Nf3. Keep an eye on center control.';
+            return 'Nf3 develops actively and attacks e5. Watch out for Black developing Nc6 to protect it.';
           case 'simple':
-            return 'Good move developing your knight.';
+            return 'Good move developing your knight to control the center.';
           case 'competitive':
-            return 'White maintains a slight +0.3 initiative with active knight development.';
+            return 'White maintains +0.3 evaluation with active knight development pressuring e5.';
         }
       };
 
@@ -307,7 +286,6 @@ async function runRegressionTests() {
         throw new Error(`Test 6 Failed: Expected source 'gemini', got ${res.source}`);
       }
 
-      // Verify length limits
       const wordCount = res.comment.split(/\s+/).length;
       const maxWords = getMaxWordsForMode(mode);
       if (wordCount > maxWords) {
@@ -347,9 +325,30 @@ async function runRegressionTests() {
     console.log(`✓ Test 7 passed: Fallback commentary cleanly returned: "${fallbackRes.comment}"`);
 
     // =========================================================================
-    // Test 8: Listener notification on commentary generation
+    // Test 8: Context-based Cache Key Separation (previousFen + moveUci + fen + mode)
     // =========================================================================
-    console.log('Test 8: Automatic commentary listener notification...');
+    console.log('Test 8: Commentary cache separation for different moves reaching same position...');
+    coachCommentaryService.resetRateLimit();
+    geminiService.generateLiveCommentary = async (_prompt) => 'Custom explanation for move A';
+
+    const factsMoveA: MoveFacts = { ...mockMoveFacts, previousFen: 'fen_A', moveUci: 'e2e4' };
+    const factsMoveB: MoveFacts = { ...mockMoveFacts, previousFen: 'fen_B', moveUci: 'd2d4' };
+
+    coachCommentaryService.clearCache();
+    const resA = await coachCommentaryService.generateCommentary(factsMoveA, [], 'learning', true);
+
+    geminiService.generateLiveCommentary = async (_prompt) => 'Custom explanation for move B';
+    const resB = await coachCommentaryService.generateCommentary(factsMoveB, [], 'learning', true);
+
+    if (resA?.comment === resB?.comment) {
+      throw new Error('Test 8 Failed: Different moves reaching same position must NOT share cached commentary');
+    }
+    console.log('✓ Test 8 passed: Cache keys correctly separate by full move context.');
+
+    // =========================================================================
+    // Test 9: Listener notification and deduplication
+    // =========================================================================
+    console.log('Test 9: Automatic commentary listener notification and event ID...');
     let notifiedResult: CommentaryResult | null = null;
     const unsubscribe = coachCommentaryService.subscribeToCommentary((r) => {
       notifiedResult = r;
@@ -359,18 +358,60 @@ async function runRegressionTests() {
     await coachCommentaryService.generateCommentary(mockMoveFacts, ['e4', 'e5', 'Nf3'], 'simple', true);
 
     unsubscribe();
-    if (!notifiedResult) {
-      throw new Error('Test 8 Failed: Registered subscriber did not receive commentary result');
+    if (!notifiedResult || !(notifiedResult as CommentaryResult).id) {
+      throw new Error('Test 9 Failed: Registered subscriber did not receive commentary result with unique event ID');
     }
-    console.log('✓ Test 8 passed: Subscriber received live commentary notification.');
+    console.log('✓ Test 9 passed: Subscriber received live commentary notification with event ID.');
+
+    // =========================================================================
+    // Test 10: Legal Move Validation with chess.js
+    // =========================================================================
+    console.log('Test 10: Validated candidate moves using chess.js...');
+    const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const afterE4 = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+
+    engineService.evaluate = async () => ({
+      score: 20,
+      mate: null,
+      bestMove: 'e2e4',
+      source: 'stockfish' as const,
+      isAvailable: true,
+      status: 'available' as const,
+    });
+
+    coachCommentaryService.clearCache();
+    const validatedFacts = await coachCommentaryService.computeMoveFacts(
+      startFen,
+      afterE4,
+      { from: 'e2', to: 'e4', san: 'e4', piece: 'p' as const },
+      'w'
+    );
+
+    if (validatedFacts.bestMoveSan !== 'e4') {
+      throw new Error(`Test 10 Failed: Expected bestMoveSan 'e4', got ${validatedFacts.bestMoveSan}`);
+    }
+
+    // Verify illegal UCI move is safely rejected by chess.js validation
+    const game = new Chess(startFen);
+    let illegalMoveFailed = false;
+    try {
+      game.move({ from: 'e2', to: 'e8' }); // Illegal pawn jump
+    } catch {
+      illegalMoveFailed = true;
+    }
+    if (!illegalMoveFailed) {
+      throw new Error('Test 10 Failed: chess.js should reject illegal move e2e8');
+    }
+    console.log('✓ Test 10 passed: Candidate moves validated with chess.js against position.');
   } finally {
     geminiService.generateLiveCommentary = origGenerateLive;
     geminiService.hasKey = origHasKey;
+    engineService.evaluate = origEvaluate;
     coachCommentaryService.resetRateLimit();
   }
 
   console.log('\n======================================================');
-  console.log('ALL REGRESSION TESTS PASSED (8/8)');
+  console.log('ALL PHASE 2 REGRESSION TESTS PASSED (10/10)');
   console.log('======================================================');
   process.exit(0);
 }

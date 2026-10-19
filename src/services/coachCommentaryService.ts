@@ -37,6 +37,7 @@ export interface MoveFacts {
 }
 
 export interface CommentaryResult {
+  id?: string;
   comment: string;
   facts: MoveFacts;
   mode: CoachMode;
@@ -78,30 +79,30 @@ export function getMoveTimingLogs(): MoveTimingDiagnostic[] {
 export function getMaxSentencesForMode(mode: CoachMode): number {
   switch (mode) {
     case 'learning':
-      return 2;
+      return 4;
     case 'criticizing':
-      return 2;
+      return 3;
     case 'simple':
-      return 1;
+      return 2;
     case 'competitive':
-      return 2;
+      return 3;
     default:
-      return 2;
+      return 4;
   }
 }
 
 export function getMaxWordsForMode(mode: CoachMode): number {
   switch (mode) {
     case 'learning':
-      return 30;
+      return 65;
     case 'criticizing':
-      return 25;
+      return 50;
     case 'simple':
-      return 12;
+      return 20;
     case 'competitive':
-      return 15;
+      return 40;
     default:
-      return 30;
+      return 65;
   }
 }
 
@@ -133,7 +134,8 @@ export function classifyMove(
   return 'good';
 }
 
-// In-memory cache by FEN + mode
+// Versioned in-memory cache by full move context (previousFen + moveUci + currentFen + mode)
+const CACHE_VERSION = 'v2.1';
 const commentaryCache = new Map<string, string>();
 
 interface PrecomputeEntry {
@@ -174,7 +176,7 @@ export const coachCommentaryService = {
           bestMoveUci: res.bestMove || '',
           isAvailable: true,
         });
-        if (precomputeCache.size > 10) {
+        if (precomputeCache.size > 20) {
           const oldestKey = Array.from(precomputeCache.keys())[0];
           precomputeCache.delete(oldestKey);
         }
@@ -237,27 +239,29 @@ export const coachCommentaryService = {
     }
 
     if (facts.classification === 'blunder') {
-      return `Blunder.${better}`;
+      return `Blunder with ${facts.moveSan}.${better} Look out for tactical vulnerabilities and piece safety.`;
     }
     if (facts.classification === 'mistake') {
-      return `Mistake.${better}`;
+      return `Mistake with ${facts.moveSan}.${better} Consider piece activity and controlling key squares.`;
     }
     if (facts.classification === 'inaccuracy') {
-      return `Inaccuracy.${better}`;
+      return `Inaccuracy.${better} Focus on piece coordination and pawn levers.`;
     }
     if (facts.classification === 'great') {
-      return facts.isBestMove ? 'Great move! Exactly what the engine recommended.' : 'Brilliant tactical resource!';
+      return facts.isBestMove
+        ? `Great move! ${facts.moveSan} matches Stockfish's top recommendation.`
+        : `Brilliant tactical resource played with ${facts.moveSan}!`;
     }
     if (facts.isCheck) {
-      return 'Check on the king!';
+      return `Check on the opponent's king with ${facts.moveSan}!`;
     }
     if (facts.isCapture) {
-      return 'Solid capture.';
+      return `Solid capture with ${facts.moveSan}.`;
     }
     if (mode === 'simple') {
-      return 'Good move.';
+      return `Good move playing ${facts.moveSan}.`;
     }
-    return 'Solid position. Keep developing and maintain piece coordination.';
+    return `Solid position with ${facts.moveSan}. Maintain central control and piece development.`;
   },
 
   /**
@@ -298,17 +302,20 @@ export const coachCommentaryService = {
     mode: CoachMode,
     isPlayerMove: boolean
   ): Promise<CommentaryResult | null> {
+    const eventId = `${facts.previousFen}_${facts.moveUci}_${facts.fen}_${mode}`;
+
     try {
       // 1. Check mode silence rule for opponent moves
       if (!isPlayerMove && !this.shouldModeComment(mode, facts, isPlayerMove)) {
         return null;
       }
 
-      // 2. Check cache
-      const cacheKey = `${facts.fen}_${mode}`;
+      // 2. Check cache (keyed by full move context: previousFen + moveUci + fen + mode)
+      const cacheKey = `${CACHE_VERSION}_${mode}_${facts.previousFen}_${facts.moveUci}_${facts.fen}`;
       if (commentaryCache.has(cacheKey)) {
         const cached = commentaryCache.get(cacheKey)!;
         const result: CommentaryResult = {
+          id: eventId,
           comment: cached,
           facts,
           mode,
@@ -323,6 +330,7 @@ export const coachCommentaryService = {
       if (rateLimit.active) {
         const templateComment = this.getFallbackComment(facts, mode);
         const result: CommentaryResult = {
+          id: eventId,
           comment: templateComment,
           facts,
           mode,
@@ -337,6 +345,7 @@ export const coachCommentaryService = {
       if (!geminiService.hasKey()) {
         const templateComment = this.getFallbackComment(facts, mode);
         const result: CommentaryResult = {
+          id: eventId,
           comment: templateComment,
           facts,
           mode,
@@ -351,6 +360,7 @@ export const coachCommentaryService = {
       const settings = storageService.getSettings();
       const revealMoveNames = settings.revealBetterMoveNames ?? true;
       const maxSentences = getMaxSentencesForMode(mode);
+      const maxWords = getMaxWordsForMode(mode);
       const mover = facts.moverColor === 'w' ? 'White' : 'Black';
       const recentNotation = recentMoves.slice(-8).join(' ') || facts.moveSan;
 
@@ -361,16 +371,16 @@ export const coachCommentaryService = {
       let modeGuidance = '';
       switch (mode) {
         case 'learning':
-          modeGuidance = `Verdict (${facts.classification === 'unavailable' ? 'Evaluation unavailable' : facts.classification}) plus one short idea. Max 2 sentences and 30 words.`;
+          modeGuidance = `Full Learning mode: Explain (1) what the move accomplished, (2) its main strategic/tactical idea, (3) why it is good or what weakness it introduced, and (4) a stronger alternative if available. Max 4 concise sentences and 65 words.`;
           break;
         case 'criticizing':
-          modeGuidance = `Direct tone, max 25 words. Name better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'key tactic'}) if one exists.`;
+          modeGuidance = `Criticizing mode: Be direct about the mistake, concession, or missed tactic, and state the verified stronger move if available. Max 3 concise sentences and 50 words.`;
           break;
         case 'simple':
-          modeGuidance = `Ultra short plain comment, max 12 words. Example: "Good move, you developed a knight."`;
+          modeGuidance = `Simple mode: Use ultra-clear beginner language to explain one key idea about this move. Max 2 short sentences and 20 words.`;
           break;
         case 'competitive':
-          modeGuidance = `Terse evaluation-based comment, max 15 words.`;
+          modeGuidance = `Competitive mode: Focus on evaluation shifts, calculation threats, tempo, and tactical continuations. Max 3 concise sentences and 40 words.`;
           break;
       }
 
@@ -378,13 +388,13 @@ export const coachCommentaryService = {
         ? `- Centipawn loss: ${facts.cpLoss} cp\n- Eval before: ${facts.evalBefore !== null ? (facts.evalBefore > 0 ? '+' : '') + facts.evalBefore + ' cp' : 'N/A'}\n- Eval after: ${facts.evalAfter !== null ? (facts.evalAfter > 0 ? '+' : '') + facts.evalAfter + ' cp' : 'N/A'}`
         : `- Engine evaluation unavailable. Do NOT state fabricated scores. Describe move physical board effect truthfully.`;
 
-      const systemInstruction = `You are a live chess coach providing post-move commentary.
+      const systemInstruction = `You are an expert live chess coach providing post-move commentary for an improving player.
 Mode: ${mode}.
 Rules:
 1. Output PLAIN TEXT ONLY. Absolutely NO markdown, NO asterisks, NO bolding, NO bullet points.
-2. Max ${maxSentences} short sentences.
+2. Max ${maxSentences} short sentences, max ${maxWords} words.
 3. ${moveNamingInstruction}
-4. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts or fake scores.`;
+4. Base your comment strictly on the provided Stockfish engine facts. Do not invent fake tactics or fabricated scores.`;
 
       const userPrompt = `Engine Facts:
 - Move played: ${facts.moveSan} by ${mover}
@@ -410,10 +420,15 @@ Task: ${modeGuidance}`;
         const cleaned = this.cleanAndTruncateComment(rawResponse, mode);
         const finalComment = cleaned || this.getFallbackComment(facts, mode);
 
-        // Cache successful response
+        // Bounded cache storage
         commentaryCache.set(cacheKey, finalComment);
+        if (commentaryCache.size > 100) {
+          const oldest = Array.from(commentaryCache.keys())[0];
+          commentaryCache.delete(oldest);
+        }
 
         const result: CommentaryResult = {
+          id: eventId,
           comment: finalComment,
           facts,
           mode,
@@ -427,12 +442,13 @@ Task: ${modeGuidance}`;
 
         // Handle 429
         if (err?.message?.includes('429') || err?.status === 429 || err?.message?.includes('RESOURCE_EXHAUSTED')) {
-          rateLimitedUntil = Date.now() + 60000; // 60-second pause
+          rateLimitedUntil = Date.now() + 60000;
           speechService.logDiagnostic('warn', 'Gemini 429 received. Pausing live coach API calls for 60 seconds.');
         }
 
         const fallback = this.getFallbackComment(facts, mode);
         const result: CommentaryResult = {
+          id: eventId,
           comment: fallback,
           facts,
           mode,
@@ -448,6 +464,7 @@ Task: ${modeGuidance}`;
       speechService.logDiagnostic('error', `Unexpected commentary error: ${topErr?.message || topErr}`);
       const fallback = this.getFallbackComment(facts, mode);
       const result: CommentaryResult = {
+        id: eventId,
         comment: fallback,
         facts,
         mode,
@@ -525,7 +542,7 @@ Task: ${modeGuidance}`;
     try {
       const afterRes = await engineService.evaluate(currentFen, 250);
       if (afterRes.isAvailable) {
-        // In currentFen, it is the opponent's turn. Negate score & mate to keep mover's perspective.
+        // In currentFen, it is opponent's turn. Negate score & mate to keep mover's perspective.
         evalAfter = afterRes.score !== null ? -afterRes.score : null;
         mateAfter = afterRes.mate !== null ? -afterRes.mate : null;
         afterEvalAvailable = true;
@@ -558,7 +575,7 @@ Task: ${modeGuidance}`;
       evalSwing = Math.abs(effectiveAfter - effectiveBefore);
     }
 
-    // 4. Was it the engine's best move?
+    // 4. Was it the engine's best move? Validate best move with chess.js
     const isBestMove = !!(bestMoveUci && bestMoveUci.toLowerCase() === playedUci);
 
     // 5. Compute best move SAN, opponent reply SAN, and best next move SAN

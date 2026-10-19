@@ -665,13 +665,14 @@ export const PlayView: React.FC<PlayViewProps> = ({
       </div>
 
       {/* Live Coach Commentary Card */}
-      {settings.liveCoachEnabled && latestComment && (
+      {settings.liveCoachEnabled && (latestComment || commentFacts || isCoachAnalyzing) && (
         <LiveCommentaryCard
           comment={latestComment}
           isMuted={isCoachMuted}
           onToggleMute={toggleCoachMute}
           mode={settings.coachMode}
           facts={commentFacts}
+          isAnalyzing={isCoachAnalyzing}
           error={coachError}
           onOpenCoach={onOpenCoach}
           onDismiss={dismissCoachComment}

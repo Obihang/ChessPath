@@ -79,18 +79,26 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     storageService.saveSettings(updated);
   };
 
-  // Keep full history of live coach comments in the Coach Drawer
+  // Keep full history of live coach comments in the Coach Drawer (deduplicated)
   useEffect(() => {
     const unsubscribe = coachCommentaryService.subscribeToCommentary((res) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `live-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          sender: 'coach',
-          text: `[Live Move Commentary - ${res.facts.moveSan}]: ${res.comment}`,
-          timestamp: res.timestamp || new Date(),
-        },
-      ]);
+      if (!res || !res.comment) return;
+      const eventId = res.id || `${res.facts.previousFen}_${res.facts.moveUci}_${res.facts.fen}_${res.mode}`;
+      setMessages((prev) => {
+        if (prev.some((m) => (m as any).eventId === eventId)) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: `live-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            eventId,
+            sender: 'coach',
+            text: `[Live Move Commentary - ${res.facts.moveSan}]: ${res.comment}`,
+            timestamp: res.timestamp || new Date(),
+          } as any,
+        ];
+      });
     });
     return unsubscribe;
   }, []);

@@ -93,20 +93,20 @@ export function enforceLengthCaps(rawText: string, mode: CoachMode): string {
 
   switch (mode) {
     case 'learning':
-      maxSentences = 2;
-      maxWords = 30;
+      maxSentences = 4;
+      maxWords = 65;
       break;
     case 'criticizing':
-      maxSentences = 2;
-      maxWords = 25;
+      maxSentences = 3;
+      maxWords = 50;
       break;
     case 'simple':
-      maxSentences = 1;
-      maxWords = 12;
+      maxSentences = 2;
+      maxWords = 20;
       break;
     case 'competitive':
-      maxSentences = 2;
-      maxWords = 15;
+      maxSentences = 3;
+      maxWords = 40;
       break;
   }
 
@@ -134,12 +134,17 @@ export function enforceLengthCaps(rawText: string, mode: CoachMode): string {
 
 /**
  * Classifies move based on centipawn loss and engine flags.
+ * Explicitly returns 'unavailable' when evaluation evidence is missing.
  */
 export function classifyMoveThresholds(
-  cpLoss: number,
+  cpLoss: number | null,
   isBestMove: boolean = false,
-  isSacrifice: boolean = false
-): 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' {
+  isSacrifice: boolean = false,
+  isEvaluationAvailable: boolean = true
+): 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' | 'unavailable' {
+  if (!isEvaluationAvailable || cpLoss === null) {
+    return 'unavailable';
+  }
   if (isBestMove || (isSacrifice && cpLoss <= 25)) {
     return 'great';
   }

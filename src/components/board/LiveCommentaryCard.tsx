@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw, Navigation } from 'lucide-react';
+import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw, Navigation, Loader2 } from 'lucide-react';
 import { CoachMode } from '../../types/chess';
 import { MoveFacts } from '../../services/coachCommentaryService';
 
@@ -9,6 +9,7 @@ export interface LiveCommentaryCardProps {
   onToggleMute: () => void;
   mode?: CoachMode;
   facts?: MoveFacts | null;
+  isAnalyzing?: boolean;
   onOpenCoach?: () => void;
   onDismiss?: () => void;
   onRepeat?: () => void;
@@ -23,6 +24,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   onToggleMute,
   mode = 'learning',
   facts,
+  isAnalyzing = false,
   onOpenCoach,
   onDismiss,
   onRepeat,
@@ -30,7 +32,8 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   isRateLimited = false,
   error = null,
 }) => {
-  if (!comment) return null;
+  const displayText = comment || (isAnalyzing ? 'Analyzing position and generating coach explanation...' : null);
+  if (!displayText && !error && !facts) return null;
 
   // Derive badge style and label from engine facts
   let badgeLabel = mode === 'learning' ? 'Coach' : mode.toUpperCase();
@@ -71,23 +74,23 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
     <div className="w-full max-w-[520px] bg-slate-900/95 border border-slate-700/70 rounded-xl p-3 shadow-xl flex items-start gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
       {/* Coach Bot Icon */}
       <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 mt-0.5">
-        <Bot className="w-4 h-4" />
+        {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
       </div>
 
       {/* Main Comment Text & Badge */}
-      <div className="flex-1 min-w-0 space-y-1">
-        <div className="flex items-center gap-2">
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${badgeColor}`}>
             {badgeLabel}
           </span>
           {facts?.moveSan && (
-            <span className="text-[11px] text-slate-400 font-mono">
-              on {facts.moveSan}
+            <span className="text-[11px] text-slate-300 font-mono font-medium">
+              on move <strong className="text-amber-400">{facts.moveSan}</strong>
             </span>
           )}
           {facts && facts.evalAfter !== null && (
-            <span className="text-[10px] text-slate-500 font-mono ml-auto">
-              {facts.evalAfter >= 0 ? `+${(facts.evalAfter / 100).toFixed(1)}` : (facts.evalAfter / 100).toFixed(1)}
+            <span className="text-[10px] text-slate-400 font-mono ml-auto">
+              Eval: {facts.evalAfter >= 0 ? `+${(facts.evalAfter / 100).toFixed(1)}` : (facts.evalAfter / 100).toFixed(1)}
             </span>
           )}
           {facts && facts.evalAfter === null && facts.mateAfter !== null && facts.mateAfter !== undefined && (
@@ -97,13 +100,15 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
           )}
         </div>
 
-        <p className="text-xs text-slate-200 leading-relaxed font-medium">
-          {comment}
-        </p>
+        {displayText && (
+          <p className="text-xs text-slate-200 leading-relaxed font-medium">
+            {displayText}
+          </p>
+        )}
 
         {/* Visible failure feedback */}
         {error && (
-          <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 px-2 py-0.5 rounded-md font-medium pt-0.5 flex items-center gap-1.5">
+          <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 px-2.5 py-1 rounded-md font-medium flex items-center gap-1.5">
             <span className="shrink-0 text-rose-400">⚠️</span>
             <span>{error}</span>
           </div>
@@ -112,7 +117,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
         {/* Rate limit warning if active */}
         {isRateLimited && (
           <div className="text-[10px] text-amber-400 font-medium pt-0.5">
-            ⚠️ Gemini API quota paused. Showing engine facts analysis.
+            ⚠️ Gemini API quota paused. Showing local engine analysis.
           </div>
         )}
 
@@ -126,7 +131,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
                 const to = facts!.bestMoveUci!.slice(2, 4);
                 onShowBetterMove(from, to);
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
             >
               <Navigation className="w-3 h-3 text-amber-400" />
               <span>Show better move ({facts.bestMoveSan}) on board</span>
@@ -141,7 +146,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
           <button
             type="button"
             onClick={onRepeat}
-            className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
             title="Repeat speech"
           >
             <RotateCw className="w-3.5 h-3.5" />
@@ -151,7 +156,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
         <button
           type="button"
           onClick={onToggleMute}
-          className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+          className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
           title={isMuted ? 'Unmute live commentary' : 'Mute live commentary'}
         >
           {isMuted ? <VolumeX className="w-3.5 h-3.5 text-slate-500" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
@@ -161,7 +166,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
           <button
             type="button"
             onClick={onOpenCoach}
-            className="p-1 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
             title="Chat with AI Coach"
           >
             <MessageSquare className="w-3.5 h-3.5" />
@@ -172,7 +177,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
           <button
             type="button"
             onClick={onDismiss}
-            className="p-1 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors ml-0.5"
+            className="p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors ml-0.5"
             title="Dismiss"
           >
             <X className="w-3.5 h-3.5" />
