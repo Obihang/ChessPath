@@ -172,7 +172,37 @@ async function runRegressionTests() {
     if (!factsMissingAfter.isBestMove) {
       throw new Error('Test 4b Failed: isBestMove should reflect engine candidate match');
     }
-    console.log('✓ Test 4 passed: Unavailable engine evaluations produce explicit nulls and unavailable classification.');
+
+    // 4c. Both evaluations fail
+    engineService.evaluate = async () => {
+      return {
+        score: null,
+        mate: null,
+        bestMove: '',
+        source: 'stockfish' as const,
+        isAvailable: false,
+        status: 'unavailable' as const,
+        error: 'Engine offline',
+      };
+    };
+
+    coachCommentaryService.clearCache();
+    const factsBothMissing = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, moveRec, 'w');
+    if (factsBothMissing.evalBefore !== null || factsBothMissing.evalAfter !== null || factsBothMissing.cpLoss !== null) {
+      throw new Error('Test 4c Failed: Both evalBefore, evalAfter, and cpLoss must be null when both evals fail');
+    }
+    if (factsBothMissing.classification !== 'unavailable') {
+      throw new Error(`Test 4c Failed: Classification must be 'unavailable', got ${factsBothMissing.classification}`);
+    }
+
+    // 4d. Sacrifice detection without valid evaluations MUST be false
+    const knightMove = { from: 'g1', to: 'f3', san: 'Nf3', color: 'w' as const, piece: 'n' as const };
+    const sacFactsMissingEval = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, knightMove, 'w');
+    if (sacFactsMissingEval.isSacrifice !== false) {
+      throw new Error('Test 4d Failed: isSacrifice must be false when engine evaluation is unavailable');
+    }
+
+    console.log('✓ Test 4 passed: Missing engine evaluations (before, after, both, sacrifice) produce explicit nulls and unavailable classification.');
 
     // =========================================================================
     // Test 5: Mate-score handling
