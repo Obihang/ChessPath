@@ -47,6 +47,7 @@ export interface MoveRecord {
   color: PieceColor;
   piece: PieceType;
   captured?: PieceType;
+  promotion?: PieceType;
   fen: string;
 }
 

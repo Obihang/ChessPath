@@ -350,7 +350,7 @@ Strict instructions:
           <div className="flex items-center gap-1">
             <select
               value={conversationMode}
-              onChange={(e) => setConversationMode(e.target.value as any)}
+              onChange={(e) => handleModeChange(e.target.value as CoachMode)}
               className="bg-slate-800 border border-slate-700 text-slate-200 text-[10px] rounded-lg px-2 py-1.5 focus:outline-hidden focus:border-amber-500"
             >
               <option value="learning">Full Learning</option>
