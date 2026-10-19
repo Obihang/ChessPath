@@ -287,10 +287,10 @@ class SpeechService {
    * directly from IndexedDB without making any network API calls.
    */
   public async speakVerdictInstant(
-    classification: 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder',
+    classification: 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' | 'unavailable',
     settings: AppSettings
   ): Promise<boolean> {
-    if (!settings.voiceEnabled) return false;
+    if (!settings.voiceEnabled || classification === 'unavailable') return false;
 
     const phraseMap: Record<string, string> = {
       great: 'Great move.',
@@ -300,7 +300,8 @@ class SpeechService {
       blunder: 'Blunder.',
     };
 
-    const phrase = phraseMap[classification] || 'Good move.';
+    const phrase = phraseMap[classification];
+    if (!phrase) return false;
     const voice = settings.geminiVoice || 'Kore';
 
     try {

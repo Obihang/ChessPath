@@ -6,7 +6,7 @@ import { engineService } from './engineService';
 import { storageService } from './storageService';
 import { enforceLengthCaps } from '../utils/audioUtils';
 
-export type MoveClassification = 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
+export type MoveClassification = 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' | 'unavailable';
 
 export interface MoveFacts {
   fen: string;
@@ -14,9 +14,12 @@ export interface MoveFacts {
   moveSan: string;
   moveUci: string;
   moverColor: 'w' | 'b';
-  evalBefore: number; // mover's perspective (cp)
-  evalAfter: number;  // mover's perspective (cp)
-  cpLoss: number;
+  evalBefore: number | null; // mover's perspective (cp)
+  evalAfter: number | null;  // mover's perspective (cp)
+  mateBefore?: number | null;
+  mateAfter?: number | null;
+  cpLoss: number | null;
+  isEvaluationAvailable: boolean;
   isBestMove: boolean;
   bestMoveSan?: string;
   bestMoveUci?: string;
@@ -30,8 +33,7 @@ export interface MoveFacts {
   classification: MoveClassification;
   gamePhase: 'opening' | 'middlegame' | 'endgame';
   isPhaseChange?: boolean;
-  evalSwing: number;
-  isEvalAvailable?: boolean;
+  evalSwing: number | null;
 }
 
 export interface CommentaryResult {
@@ -69,9 +71,78 @@ export function getMoveTimingLogs(): MoveTimingDiagnostic[] {
   return [...timingLogs];
 }
 
+/**
+ * Pure module-level helpers for mode limits.
+ * Guarantees no runtime failure from object method binding.
+ */
+export function getMaxSentencesForMode(mode: CoachMode): number {
+  switch (mode) {
+    case 'learning':
+      return 2;
+    case 'criticizing':
+      return 2;
+    case 'simple':
+      return 1;
+    case 'competitive':
+      return 2;
+    default:
+      return 2;
+  }
+}
+
+export function getMaxWordsForMode(mode: CoachMode): number {
+  switch (mode) {
+    case 'learning':
+      return 30;
+    case 'criticizing':
+      return 25;
+    case 'simple':
+      return 12;
+    case 'competitive':
+      return 15;
+    default:
+      return 30;
+  }
+}
+
+/**
+ * Pure helper for move classification based on genuine engine evaluation.
+ * Never fabricates 'good' move on missing evaluations.
+ */
+export function classifyMove(
+  cpLoss: number | null,
+  isBestMove: boolean,
+  isSacrifice: boolean = false,
+  isEvaluationAvailable: boolean = true
+): MoveClassification {
+  if (!isEvaluationAvailable || cpLoss === null) {
+    return 'unavailable';
+  }
+  if (isBestMove || (isSacrifice && cpLoss <= 25)) {
+    return 'great';
+  }
+  if (cpLoss > 250) {
+    return 'blunder';
+  }
+  if (cpLoss > 100) {
+    return 'mistake';
+  }
+  if (cpLoss > 50) {
+    return 'inaccuracy';
+  }
+  return 'good';
+}
+
 // In-memory cache by FEN + mode
 const commentaryCache = new Map<string, string>();
-const precomputeCache = new Map<string, { score: number | null; bestMoveUci: string }>();
+
+interface PrecomputeEntry {
+  score: number | null;
+  mate: number | null;
+  bestMoveUci: string;
+  isAvailable: boolean;
+}
+const precomputeCache = new Map<string, PrecomputeEntry>();
 
 // 429 cooldown state
 let rateLimitedUntil = 0;
@@ -81,6 +152,14 @@ type CommentaryListener = (result: CommentaryResult) => void;
 const commentaryListeners = new Set<CommentaryListener>();
 
 export const coachCommentaryService = {
+  getMaxSentencesForMode(mode: CoachMode): number {
+    return getMaxSentencesForMode(mode);
+  },
+
+  getMaxWordsForMode(mode: CoachMode): number {
+    return getMaxWordsForMode(mode);
+  },
+
   /**
    * Precomputes evaluation for player's turn in background while player thinks
    */
@@ -89,7 +168,12 @@ export const coachCommentaryService = {
     try {
       const res = await engineService.evaluate(fen, 250);
       if (res.isAvailable) {
-        precomputeCache.set(fen, { score: res.score, bestMoveUci: res.bestMove || '' });
+        precomputeCache.set(fen, {
+          score: res.score,
+          mate: res.mate,
+          bestMoveUci: res.bestMove || '',
+          isAvailable: true,
+        });
         if (precomputeCache.size > 10) {
           const oldestKey = Array.from(precomputeCache.keys())[0];
           precomputeCache.delete(oldestKey);
@@ -103,20 +187,13 @@ export const coachCommentaryService = {
   /**
    * Classify move based on engine centipawn loss and flags
    */
-  classifyMove(cpLoss: number, isBestMove: boolean, isSacrifice: boolean = false): MoveClassification {
-    if (isBestMove || (isSacrifice && cpLoss <= 25)) {
-      return 'great';
-    }
-    if (cpLoss > 250) {
-      return 'blunder';
-    }
-    if (cpLoss > 100) {
-      return 'mistake';
-    }
-    if (cpLoss > 50) {
-      return 'inaccuracy';
-    }
-    return 'good';
+  classifyMove(
+    cpLoss: number | null,
+    isBestMove: boolean,
+    isSacrifice: boolean = false,
+    isEvaluationAvailable: boolean = true
+  ): MoveClassification {
+    return classifyMove(cpLoss, isBestMove, isSacrifice, isEvaluationAvailable);
   },
 
   /**
@@ -128,7 +205,11 @@ export const coachCommentaryService = {
     if (isPlayerMove) {
       return true; // Always give feedback on player moves in ALL modes!
     }
-    return facts.evalSwing >= 150 || facts.isCheck || facts.classification === 'blunder';
+    return (
+      (facts.evalSwing !== null && facts.evalSwing >= 150) ||
+      facts.isCheck ||
+      facts.classification === 'blunder'
+    );
   },
 
   /**
@@ -139,10 +220,21 @@ export const coachCommentaryService = {
   },
 
   /**
-   * Short template comment built from engine facts without Gemini
+   * Short truthful template comment built from engine facts without Gemini
    */
   getFallbackComment(facts: MoveFacts, mode: CoachMode): string {
     const better = facts.bestMoveSan ? ` The engine preferred ${facts.bestMoveSan}.` : '';
+
+    if (facts.classification === 'unavailable') {
+      const candidate = facts.bestMoveSan ? ` Engine candidate was ${facts.bestMoveSan}.` : '';
+      if (facts.isCheck) return `Check on the king!${candidate}`;
+      if (facts.isCapture) return `Capture played.${candidate}`;
+      if (facts.isCastling) return `Castled to safety.${candidate}`;
+      if (facts.isBestMove && facts.bestMoveSan) {
+        return `You played ${facts.moveSan}, matching the engine candidate move. Detailed quality analysis was unavailable.`;
+      }
+      return `You played ${facts.moveSan}.${candidate} Engine evaluation was unavailable.`;
+    }
 
     if (facts.classification === 'blunder') {
       return `Blunder.${better}`;
@@ -190,6 +282,14 @@ export const coachCommentaryService = {
   },
 
   /**
+   * Clear commentary cache (for tests)
+   */
+  clearCache(): void {
+    commentaryCache.clear();
+    precomputeCache.clear();
+  },
+
+  /**
    * Generate live commentary for a move based on engine facts
    */
   async generateCommentary(
@@ -198,91 +298,98 @@ export const coachCommentaryService = {
     mode: CoachMode,
     isPlayerMove: boolean
   ): Promise<CommentaryResult | null> {
-    // 1. Check mode silence rule for opponent moves
-    if (!isPlayerMove && !this.shouldModeComment(mode, facts, isPlayerMove)) {
-      return null;
-    }
+    try {
+      // 1. Check mode silence rule for opponent moves
+      if (!isPlayerMove && !this.shouldModeComment(mode, facts, isPlayerMove)) {
+        return null;
+      }
 
-    // 2. Check cache
-    const cacheKey = `${facts.fen}_${mode}`;
-    if (commentaryCache.has(cacheKey)) {
-      return {
-        comment: commentaryCache.get(cacheKey)!,
-        facts,
-        mode,
-        source: 'cache',
-      };
-    }
+      // 2. Check cache
+      const cacheKey = `${facts.fen}_${mode}`;
+      if (commentaryCache.has(cacheKey)) {
+        const cached = commentaryCache.get(cacheKey)!;
+        const result: CommentaryResult = {
+          comment: cached,
+          facts,
+          mode,
+          source: 'cache',
+        };
+        this.notifyListeners(result);
+        return result;
+      }
 
-    // 3. Check rate limiting
-    const rateLimit = this.isRateLimited();
-    if (rateLimit.active) {
-      const templateComment = this.getFallbackComment(facts, mode);
-      return {
-        comment: templateComment,
-        facts,
-        mode,
-        source: 'template',
-        isRateLimited: true,
-      };
-    }
+      // 3. Check rate limiting
+      const rateLimit = this.isRateLimited();
+      if (rateLimit.active) {
+        const templateComment = this.getFallbackComment(facts, mode);
+        const result: CommentaryResult = {
+          comment: templateComment,
+          facts,
+          mode,
+          source: 'template',
+          isRateLimited: true,
+        };
+        this.notifyListeners(result);
+        return result;
+      }
 
-    // 4. Check if API key exists
-    if (!geminiService.hasKey()) {
-      const templateComment = this.getFallbackComment(facts, mode);
-      const result: CommentaryResult = {
-        comment: templateComment,
-        facts,
-        mode,
-        source: 'template',
-        timestamp: new Date(),
-      };
-      this.notifyListeners(result);
-      return result;
-    }
+      // 4. Check if API key exists
+      if (!geminiService.hasKey()) {
+        const templateComment = this.getFallbackComment(facts, mode);
+        const result: CommentaryResult = {
+          comment: templateComment,
+          facts,
+          mode,
+          source: 'template',
+          timestamp: new Date(),
+        };
+        this.notifyListeners(result);
+        return result;
+      }
 
-    // 5. Build strict factual prompt
-    const settings = storageService.getSettings();
-    const revealMoveNames = settings.revealBetterMoveNames ?? true;
-    const maxSentences = this.getMaxSentencesForMode(mode);
-    const mover = facts.moverColor === 'w' ? 'White' : 'Black';
-    const recentNotation = recentMoves.slice(-8).join(' ') || facts.moveSan;
+      // 5. Build strict factual prompt
+      const settings = storageService.getSettings();
+      const revealMoveNames = settings.revealBetterMoveNames ?? true;
+      const maxSentences = getMaxSentencesForMode(mode);
+      const mover = facts.moverColor === 'w' ? 'White' : 'Black';
+      const recentNotation = recentMoves.slice(-8).join(' ') || facts.moveSan;
 
-    const moveNamingInstruction = revealMoveNames
-      ? `If a better move existed, name the move notation explicitly (${facts.bestMoveSan || 'engine move'}).`
-      : `Do NOT state exact move notation or coordinate names (like ${facts.bestMoveSan || 'Nf3'}). Instead, describe the strategic idea/motif in plain words (e.g., 'controlling the open central file').`;
+      const moveNamingInstruction = revealMoveNames
+        ? `If a better move existed, name the move notation explicitly (${facts.bestMoveSan || 'engine move'}).`
+        : `Do NOT state exact move notation or coordinate names (like ${facts.bestMoveSan || 'Nf3'}). Instead, describe the strategic idea/motif in plain words (e.g., 'controlling the open central file').`;
 
-    let modeGuidance = '';
-    switch (mode) {
-      case 'learning':
-        modeGuidance = `Explain what the move did or why it was good or bad, and when relevant what to do next. Max 2 sentences and 30 words. Do NOT repeat or say the verdict word ("${facts.classification}").`;
-        break;
-      case 'criticizing':
-        modeGuidance = `Direct, critical tone, max 25 words. Point out the weakness and name the better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'alternative idea'}) if one exists. Do NOT repeat the verdict word ("${facts.classification}").`;
-        break;
-      case 'simple':
-        modeGuidance = `Ultra-short, plain observation of what the move did, max 12 words. Do NOT repeat the verdict word. Example: "You developed a knight toward the center."`;
-        break;
-      case 'competitive':
-        modeGuidance = `Terse evaluation-based comment, max 15 words. State the balance shift or threat concisely. Do NOT repeat the verdict word.`;
-        break;
-    }
+      let modeGuidance = '';
+      switch (mode) {
+        case 'learning':
+          modeGuidance = `Verdict (${facts.classification === 'unavailable' ? 'Evaluation unavailable' : facts.classification}) plus one short idea. Max 2 sentences and 30 words.`;
+          break;
+        case 'criticizing':
+          modeGuidance = `Direct tone, max 25 words. Name better move (${revealMoveNames ? (facts.bestMoveSan || 'engine move') : 'key tactic'}) if one exists.`;
+          break;
+        case 'simple':
+          modeGuidance = `Ultra short plain comment, max 12 words. Example: "Good move, you developed a knight."`;
+          break;
+        case 'competitive':
+          modeGuidance = `Terse evaluation-based comment, max 15 words.`;
+          break;
+      }
 
-    const systemInstruction = `You are a live chess coach providing post-move commentary.
+      const evalNotes = facts.isEvaluationAvailable
+        ? `- Centipawn loss: ${facts.cpLoss} cp\n- Eval before: ${facts.evalBefore !== null ? (facts.evalBefore > 0 ? '+' : '') + facts.evalBefore + ' cp' : 'N/A'}\n- Eval after: ${facts.evalAfter !== null ? (facts.evalAfter > 0 ? '+' : '') + facts.evalAfter + ' cp' : 'N/A'}`
+        : `- Engine evaluation unavailable. Do NOT state fabricated scores. Describe move physical board effect truthfully.`;
+
+      const systemInstruction = `You are a live chess coach providing post-move commentary.
 Mode: ${mode}.
 Rules:
 1. Output PLAIN TEXT ONLY. Absolutely NO markdown, NO asterisks, NO bolding, NO bullet points.
 2. Max ${maxSentences} short sentences.
 3. ${moveNamingInstruction}
-4. Do NOT repeat the verdict word ("${facts.classification}", "Great move", "Good move", "Inaccuracy", "Mistake", "Blunder") because the spoken verdict was already played.
-5. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts.`;
+4. Base your comment strictly on the provided Stockfish engine facts. Do not invent facts or fake scores.`;
 
-    const userPrompt = `Engine Facts:
+      const userPrompt = `Engine Facts:
 - Move played: ${facts.moveSan} by ${mover}
-- Classification: ${facts.classification}
-- Centipawn loss: ${facts.cpLoss} cp
-- Eval before: ${facts.evalBefore > 0 ? '+' : ''}${facts.evalBefore} cp
-- Eval after: ${facts.evalAfter > 0 ? '+' : ''}${facts.evalAfter} cp
+- Classification: ${facts.classification === 'unavailable' ? 'Evaluation unavailable' : facts.classification}
+${evalNotes}
 - Was best engine move: ${facts.isBestMove ? 'Yes' : 'No'}
 - Engine best move: ${facts.bestMoveSan || 'N/A'}
 - Opponent best reply: ${facts.opponentReplySan || 'N/A'}
@@ -293,44 +400,58 @@ Rules:
 
 Task: ${modeGuidance}`;
 
-    try {
-      const rawResponse = await geminiService.generateLiveCommentary(
-        userPrompt,
-        systemInstruction,
-        maxSentences
-      );
+      try {
+        const rawResponse = await geminiService.generateLiveCommentary(
+          userPrompt,
+          systemInstruction,
+          maxSentences
+        );
 
-      const cleaned = this.cleanAndTruncateComment(rawResponse, mode);
-      const finalComment = cleaned || this.getFallbackComment(facts, mode);
+        const cleaned = this.cleanAndTruncateComment(rawResponse, mode);
+        const finalComment = cleaned || this.getFallbackComment(facts, mode);
 
-      // Cache successful response
-      commentaryCache.set(cacheKey, finalComment);
+        // Cache successful response
+        commentaryCache.set(cacheKey, finalComment);
 
-      const result: CommentaryResult = {
-        comment: finalComment,
-        facts,
-        mode,
-        source: 'gemini',
-        timestamp: new Date(),
-      };
-      this.notifyListeners(result);
-      return result;
-    } catch (err: any) {
-      speechService.logDiagnostic('warn', `Live commentary Gemini call failed: ${err?.message || err}`);
+        const result: CommentaryResult = {
+          comment: finalComment,
+          facts,
+          mode,
+          source: 'gemini',
+          timestamp: new Date(),
+        };
+        this.notifyListeners(result);
+        return result;
+      } catch (err: any) {
+        speechService.logDiagnostic('warn', `Live commentary Gemini call failed: ${err?.message || err}`);
 
-      // Handle 429
-      if (err?.message?.includes('429') || err?.status === 429 || err?.message?.includes('RESOURCE_EXHAUSTED')) {
-        rateLimitedUntil = Date.now() + 60000; // 60-second pause
-        speechService.logDiagnostic('warn', 'Gemini 429 received. Pausing live coach API calls for 60 seconds.');
+        // Handle 429
+        if (err?.message?.includes('429') || err?.status === 429 || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+          rateLimitedUntil = Date.now() + 60000; // 60-second pause
+          speechService.logDiagnostic('warn', 'Gemini 429 received. Pausing live coach API calls for 60 seconds.');
+        }
+
+        const fallback = this.getFallbackComment(facts, mode);
+        const result: CommentaryResult = {
+          comment: fallback,
+          facts,
+          mode,
+          source: 'template',
+          isRateLimited: Date.now() < rateLimitedUntil,
+          timestamp: new Date(),
+        };
+        this.notifyListeners(result);
+        return result;
       }
-
+    } catch (topErr: any) {
+      console.warn('generateCommentary unexpected error:', topErr);
+      speechService.logDiagnostic('error', `Unexpected commentary error: ${topErr?.message || topErr}`);
       const fallback = this.getFallbackComment(facts, mode);
       const result: CommentaryResult = {
         comment: fallback,
         facts,
         mode,
         source: 'template',
-        isRateLimited: Date.now() < rateLimitedUntil,
         timestamp: new Date(),
       };
       this.notifyListeners(result);
@@ -342,13 +463,19 @@ Task: ${modeGuidance}`;
    * Determine game phase from FEN string
    */
   getGamePhase(fen: string): 'opening' | 'middlegame' | 'endgame' {
-    const parts = fen.split(' ');
-    const boardStr = parts[0] || '';
-    const moveCount = parseInt(parts[5] || '1', 10);
-    const queens = (boardStr.match(/[qQ]/g) || []).length;
-    const pieces = (boardStr.match(/[rnbqRNBQ]/g) || []).length;
-    if (moveCount <= 8 && pieces >= 14) return 'opening';
-    if (queens === 0 || pieces <= 6) return 'endgame';
+    const pieces = fen.split(' ')[0];
+    const majors = (pieces.match(/[qQrR]/g) || []).length;
+    const minors = (pieces.match(/[bBnN]/g) || []).length;
+
+    if (majors <= 2 && minors <= 2) {
+      return 'endgame';
+    }
+
+    const moveNum = parseInt(fen.split(' ')[5] || '1', 10);
+    if (moveNum <= 10 && majors === 4 && minors >= 6) {
+      return 'opening';
+    }
+
     return 'middlegame';
   },
 
@@ -365,20 +492,24 @@ Task: ${modeGuidance}`;
     const playedUci = `${move.from}${move.to}${move.promotion || ''}`.toLowerCase();
 
     // 1. Evaluate position before the move (using precalculated result if available)
-    let evalBefore = 0;
-    let evalBeforeAvailable = false;
+    let evalBefore: number | null = null;
+    let mateBefore: number | null = null;
     let bestMoveUci = '';
+    let beforeEvalAvailable = false;
+
     const precomputed = precomputeCache.get(previousFen);
-    if (precomputed && precomputed.score !== null) {
+    if (precomputed && precomputed.isAvailable) {
       evalBefore = precomputed.score;
-      evalBeforeAvailable = true;
+      mateBefore = precomputed.mate;
       bestMoveUci = precomputed.bestMoveUci;
+      beforeEvalAvailable = true;
     } else {
       try {
         const beforeRes = await engineService.evaluate(previousFen, 250);
-        if (beforeRes.isAvailable && beforeRes.score !== null) {
+        if (beforeRes.isAvailable) {
           evalBefore = beforeRes.score;
-          evalBeforeAvailable = true;
+          mateBefore = beforeRes.mate;
+          beforeEvalAvailable = true;
         }
         bestMoveUci = beforeRes.bestMove || '';
       } catch (e) {
@@ -387,15 +518,17 @@ Task: ${modeGuidance}`;
     }
 
     // 2. Evaluate position after the move & get opponent's best reply
-    let evalAfter = evalBefore;
-    let evalAfterAvailable = false;
+    let evalAfter: number | null = null;
+    let mateAfter: number | null = null;
     let opponentReplyUci = '';
+    let afterEvalAvailable = false;
     try {
       const afterRes = await engineService.evaluate(currentFen, 250);
-      if (afterRes.isAvailable && afterRes.score !== null) {
-        // In currentFen, it is the opponent's turn. Negate score to keep mover's perspective.
-        evalAfter = -afterRes.score;
-        evalAfterAvailable = true;
+      if (afterRes.isAvailable) {
+        // In currentFen, it is the opponent's turn. Negate score & mate to keep mover's perspective.
+        evalAfter = afterRes.score !== null ? -afterRes.score : null;
+        mateAfter = afterRes.mate !== null ? -afterRes.mate : null;
+        afterEvalAvailable = true;
       }
       opponentReplyUci = afterRes.bestMove || '';
     } catch (e) {
@@ -403,9 +536,27 @@ Task: ${modeGuidance}`;
     }
 
     // 3. Centipawn loss and eval swing
-    const cpLoss = evalBeforeAvailable && evalAfterAvailable ? Math.max(0, evalBefore - evalAfter) : 0;
-    const evalSwing = evalBeforeAvailable && evalAfterAvailable ? Math.abs(evalAfter - evalBefore) : 0;
-    const isEvalAvailable = evalBeforeAvailable && evalAfterAvailable;
+    const isEvaluationAvailable = beforeEvalAvailable && afterEvalAvailable;
+    let cpLoss: number | null = null;
+    let evalSwing: number | null = null;
+
+    if (isEvaluationAvailable) {
+      const effectiveBefore =
+        mateBefore !== null
+          ? mateBefore > 0
+            ? 10000 - mateBefore * 100
+            : -10000 - mateBefore * 100
+          : evalBefore!;
+      const effectiveAfter =
+        mateAfter !== null
+          ? mateAfter > 0
+            ? 10000 - mateAfter * 100
+            : -10000 - mateAfter * 100
+          : evalAfter!;
+
+      cpLoss = Math.max(0, effectiveBefore - effectiveAfter);
+      evalSwing = Math.abs(effectiveAfter - effectiveBefore);
+    }
 
     // 4. Was it the engine's best move?
     const isBestMove = !!(bestMoveUci && bestMoveUci.toLowerCase() === playedUci);
@@ -464,10 +615,14 @@ Task: ${modeGuidance}`;
     const isPromotion = !!move.promotion || move.san.includes('=');
     const isSacrifice =
       !isCapture &&
+      isEvaluationAvailable &&
+      cpLoss !== null &&
+      evalBefore !== null &&
+      evalAfter !== null &&
       !!(move.piece && ['q', 'r', 'b', 'n'].includes(move.piece) && cpLoss <= 30 && evalAfter > evalBefore - 50);
 
-    // 7. Classification: great/best, good, inaccuracy (>50 cp loss), mistake (>100), blunder (>250)
-    const classification = this.classifyMove(cpLoss, isBestMove, isSacrifice);
+    // 7. Classification
+    const classification = classifyMove(cpLoss, isBestMove, isSacrifice, isEvaluationAvailable);
 
     // 8. Phase
     const gamePhase = this.getGamePhase(currentFen);
@@ -481,7 +636,10 @@ Task: ${modeGuidance}`;
       moverColor,
       evalBefore,
       evalAfter,
+      mateBefore,
+      mateAfter,
       cpLoss,
+      isEvaluationAvailable,
       isBestMove,
       bestMoveSan,
       bestMoveUci,
@@ -496,7 +654,6 @@ Task: ${modeGuidance}`;
       gamePhase,
       isPhaseChange,
       evalSwing,
-      isEvalAvailable,
     };
   },
 

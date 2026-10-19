@@ -84,7 +84,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         setCommentFacts(facts);
 
         // 3. Instant Spoken Verdict from IndexedDB cache (0 network delay)
-        if (settings.voiceEnabled && !isMuted && isPlayerMove) {
+        if (settings.voiceEnabled && !isMuted && isPlayerMove && facts.classification !== 'unavailable') {
           speechService.speakVerdictInstant(facts.classification, settings).catch(() => {});
         }
 
@@ -148,7 +148,8 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         }
       } catch (err: any) {
         console.warn('useLiveCoach processMove error:', err);
-        setCoachError(err?.message || 'Explanation failed');
+        speechService.logDiagnostic('error', `Live coach move processing error: ${err?.message || err}`);
+        setCoachError('Coach explanation temporarily unavailable');
       } finally {
         if (!isPlayerMove || currentSeq === playerMoveSeqRef.current) {
           setIsAnalyzing(false);

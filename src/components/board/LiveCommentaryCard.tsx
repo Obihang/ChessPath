@@ -37,7 +37,10 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   let badgeColor = 'bg-amber-500/15 text-amber-300 border-amber-500/30';
 
   if (facts) {
-    if (facts.classification === 'blunder') {
+    if (facts.classification === 'unavailable') {
+      badgeLabel = facts.isBestMove ? 'Best Move (Unverified)' : 'Move Analysis Unavailable';
+      badgeColor = 'bg-slate-700/40 text-slate-300 border-slate-600/50';
+    } else if (facts.classification === 'blunder') {
       badgeLabel = 'Blunder';
       badgeColor = 'bg-rose-500/20 text-rose-300 border-rose-500/40';
     } else if (facts.classification === 'mistake') {
@@ -57,6 +60,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
 
   const showBetterMoveBtn =
     facts &&
+    facts.cpLoss !== null &&
     facts.cpLoss >= 50 &&
     facts.bestMoveSan &&
     facts.bestMoveUci &&
@@ -81,9 +85,14 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
               on {facts.moveSan}
             </span>
           )}
-          {facts && (
+          {facts && facts.evalAfter !== null && (
             <span className="text-[10px] text-slate-500 font-mono ml-auto">
               {facts.evalAfter >= 0 ? `+${(facts.evalAfter / 100).toFixed(1)}` : (facts.evalAfter / 100).toFixed(1)}
+            </span>
+          )}
+          {facts && facts.evalAfter === null && facts.mateAfter !== null && facts.mateAfter !== undefined && (
+            <span className="text-[10px] text-purple-400 font-mono ml-auto">
+              {facts.mateAfter > 0 ? `+M${facts.mateAfter}` : `-M${Math.abs(facts.mateAfter)}`}
             </span>
           )}
         </div>

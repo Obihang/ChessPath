@@ -89,8 +89,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         errStr = res.error || 'TTS failed';
       }
 
+      const fmtEval = (cp: number | null) => (cp !== null ? `${cp > 0 ? '+' : ''}${cp} cp` : 'N/A');
       setSampleMoveResult({
-        engineFacts: `Eval before: ${facts.evalBefore}, eval after: ${facts.evalAfter}, class: ${facts.classification}, bestMove: ${facts.bestMoveSan || 'N/A'}`,
+        engineFacts: `Eval before: ${fmtEval(facts.evalBefore)}, eval after: ${fmtEval(facts.evalAfter)}, class: ${facts.classification}, bestMove: ${facts.bestMoveSan || 'N/A'}`,
         generatedText: commentary?.comment || 'Good move.',
         bytesReceived: ttsBytes,
         timeToFirstAudioMs: timeToFirst,

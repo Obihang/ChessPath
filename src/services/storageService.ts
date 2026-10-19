@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export const storageService = {
   getSettings(): AppSettings {
+    if (typeof localStorage === 'undefined') return DEFAULT_SETTINGS;
     try {
       const data = localStorage.getItem(SETTINGS_KEY);
       if (data) {
@@ -71,6 +72,7 @@ export const storageService = {
   },
 
   saveSettings(settings: AppSettings): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch (e) {
@@ -86,6 +88,7 @@ export const storageService = {
   },
 
   getProgress(): UserProgress {
+    if (typeof localStorage === 'undefined') return DEFAULT_PROGRESS;
     try {
       const data = localStorage.getItem(PROGRESS_KEY);
       if (data) {
@@ -98,6 +101,7 @@ export const storageService = {
   },
 
   saveProgress(progress: UserProgress): void {
+    if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
     } catch (e) {
