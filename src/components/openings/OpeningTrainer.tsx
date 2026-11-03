@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Chess } from 'chess.js';
 import { OpeningItem } from '../../types/curriculum';
-import { AppSettings, PieceColor } from '../../types/chess';
+import { AppSettings } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
 import { soundService } from '../../services/audioService';
 import {
@@ -9,8 +9,6 @@ import {
   ChevronLeft,
   ChevronRight,
   RotateCcw,
-  GraduationCap,
-  Sparkles,
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
@@ -72,19 +70,22 @@ export const OpeningTrainer: React.FC<OpeningTrainerProps> = ({
 
   // Start / Reset Training
   const initTraining = () => {
-    const g = new Chess();
-    setTrainGame(g);
+    const initialGame = new Chess();
+    const initialFen = initialGame.fen();
+    setTrainGame(initialGame);
     setTrainStep(0);
     setTrainLastMove(null);
     setTrainFeedback('neutral');
     setTrainMistakeCount(0);
     setTrainCompleted(false);
 
-    // If training Black side, computer plays move 1 (White)
+    // If training Black side, computer plays move 1 (White) on a cloned instance
     if (opening.side === 'b' && opening.moves.length > 0) {
       setTimeout(() => {
-        const res = g.move(opening.moves[0]);
+        const replyGame = new Chess(initialFen);
+        const res = replyGame.move(opening.moves[0]);
         if (res) {
+          setTrainGame(replyGame);
           setTrainLastMove({ from: res.from, to: res.to });
           setTrainStep(1);
           soundService.playMove();
@@ -99,12 +100,27 @@ export const OpeningTrainer: React.FC<OpeningTrainerProps> = ({
     }
   }, [activeTab]);
 
-  // Handle User Move in Trainer
-  const handleTrainMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
+  // Handle User Move in Trainer without in-place state mutation
+  const handleTrainMove = (moveData: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => {
     const expectedSan = opening.moves[trainStep];
     const expectedUci = `${moveData.from}${moveData.to}`;
 
-    const isCorrect = moveData.san === expectedSan || expectedUci === expectedSan || moveData.san?.startsWith(expectedSan);
+    const isCorrect =
+      moveData.san === expectedSan ||
+      expectedUci === expectedSan ||
+      moveData.san?.startsWith(expectedSan);
+
+    const fenBeforeUserMove = moveData.before || new Chess().fen();
+    const fenAfterUserMove = moveData.after || trainGame.fen();
+    const gameCopy = new Chess(fenAfterUserMove);
+    setTrainGame(gameCopy);
 
     if (isCorrect) {
       soundService.playVictory();
@@ -121,12 +137,14 @@ export const OpeningTrainer: React.FC<OpeningTrainerProps> = ({
         return;
       }
 
-      // Computer plays next opponent move
+      // Computer plays next opponent move on a fresh Chess instance constructed from fenAfterUserMove
       setTimeout(() => {
         const oppSan = opening.moves[nextStep];
         if (oppSan) {
-          const res = trainGame.move(oppSan);
+          const replyGame = new Chess(fenAfterUserMove);
+          const res = replyGame.move(oppSan);
           if (res) {
+            setTrainGame(replyGame);
             setTrainLastMove({ from: res.from, to: res.to });
             setTrainStep(nextStep + 1);
             soundService.playMove();
@@ -143,9 +161,10 @@ export const OpeningTrainer: React.FC<OpeningTrainerProps> = ({
       setTrainFeedback('mistake');
       setTrainMistakeCount((m) => m + 1);
 
-      // Revert user move
+      // Revert user move using a fresh Chess instance constructed from fenBeforeUserMove
       setTimeout(() => {
-        trainGame.undo();
+        const revertGame = new Chess(fenBeforeUserMove);
+        setTrainGame(revertGame);
         setTrainFeedback('neutral');
       }, 600);
     }

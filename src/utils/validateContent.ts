@@ -2,6 +2,8 @@ import { Chess } from 'chess.js';
 import { RAW_PUZZLES } from '../data/puzzlesData';
 import { RAW_OPENINGS } from '../data/openingsData';
 import { RAW_GAMBITS } from '../data/gambitsData';
+import { formatChessTextForSpeech } from './voice';
+import { pcmToWav, stripMarkdown, classifyMoveThresholds, testPcmProcessingPipeline, enforceLengthCaps } from './audioUtils';
 
 export function validateAllContent() {
   let puzzlesPassed = 0;
@@ -134,8 +136,6 @@ export function validateAllContent() {
   return summary;
 }
 
-import { pcmToWav, stripMarkdown, classifyMoveThresholds, testPcmProcessingPipeline, enforceLengthCaps } from './audioUtils';
-
 export function validateAudioUtils() {
   console.log('--- Testing Audio & Chess Utilities ---');
 
@@ -178,12 +178,32 @@ export function validateAudioUtils() {
   if (classifyMoveThresholds(300, false) !== 'blunder') throw new Error('classifyMoveThresholds test failed for 300 cp loss');
   console.log('✓ classifyMoveThresholds test passed (all centipawn thresholds and null evaluation verified)');
 
-  // Test 5: Synthetic PCM processing pipeline test (Requirements C.1, C.2, C.3)
+  // Test 5: Synthetic PCM processing pipeline test
   const pcmPipelineRes = testPcmProcessingPipeline();
   if (!pcmPipelineRes.success) {
     throw new Error(`PCM Processing Pipeline Test Failed: ${pcmPipelineRes.message}`);
   }
   console.log(`✓ ${pcmPipelineRes.message}`);
+
+  // Test 6: Phonetic chess notation parser (formatChessTextForSpeech)
+  const phoneticSample = 'White plays O-O-O, Black plays O-O. Then exd5, exd5+, Nf3+, Qh5#, e8=Q+, e4+ with eval +1.5 and -0.8.';
+  const spokenOut = formatChessTextForSpeech(phoneticSample);
+  if (
+    spokenOut.includes('undefined') ||
+    !spokenOut.includes('castles queenside') ||
+    !spokenOut.includes('castles kingside') ||
+    !spokenOut.includes('e takes d5') ||
+    !spokenOut.includes('e takes d5 check') ||
+    !spokenOut.includes('Knight to f3 check') ||
+    !spokenOut.includes('Queen to h5 checkmate') ||
+    !spokenOut.includes('e8 promotes to Queen check') ||
+    !spokenOut.includes('e4 check') ||
+    !spokenOut.includes('plus 1.5') ||
+    !spokenOut.includes('minus 0.8')
+  ) {
+    throw new Error(`formatChessTextForSpeech test failed: "${spokenOut}"`);
+  }
+  console.log(`✓ formatChessTextForSpeech test passed: "${spokenOut}"`);
 
   console.log('----------------------------------------');
 }

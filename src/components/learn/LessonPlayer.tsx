@@ -63,11 +63,22 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
     });
   };
 
-  const handleMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
+  const handleMove = (moveData: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => {
     // Stop speech if speaking
     speechService.stop();
     setIsSpeaking(false);
 
+    // Clone into a fresh Chess instance instead of mutating React state in place
+    const fenAfterUserMove = moveData.after || game.fen();
+    const gameCopy = new Chess(fenAfterUserMove);
+    setGame(gameCopy);
     setLastMove({ from: moveData.from, to: moveData.to });
 
     // Check if move matches expectedMoves
@@ -83,9 +94,11 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
       setIsSuccess(true);
     } else {
       soundService.playIllegal();
-      // Reset board after slight delay
+      const stepStartFen = step.fen;
+      // Reset board after slight delay using fresh Chess instance
       setTimeout(() => {
-        setGame(new Chess(step.fen));
+        const revertGame = new Chess(stepStartFen);
+        setGame(revertGame);
         setLastMove(null);
       }, 700);
     }
@@ -104,10 +117,10 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
     if (!sol) return;
 
     try {
-      const g = new Chess(step.fen);
-      const res = g.move(sol);
+      const gameCopy = new Chess(step.fen);
+      const res = gameCopy.move(sol);
       if (res) {
-        setGame(g);
+        setGame(gameCopy);
         setLastMove({ from: res.from, to: res.to });
         setIsSuccess(true);
         soundService.playMove();

@@ -5,23 +5,75 @@ import { TTSEngineType } from '../types/chess';
 export { EDGE_NEURAL_VOICES };
 export type { EdgeVoiceOption };
 
+// Exported for backwards compatibility
+export const GEMINI_TTS_CALL_BUDGET = 0;
+
 export const EDGE_VOICES = [
-  { id: 'en-US-AndrewNeural', label: 'Coach Andrew (Warm & Confident US Male)', name: 'Andrew', lang: 'en-US' },
-  { id: 'en-US-AriaNeural', label: 'Coach Aria (Expressive US Female)', name: 'Aria', lang: 'en-US' },
-  { id: 'en-GB-RyanNeural', label: 'Grandmaster Ryan (Classic British Male)', name: 'Ryan', lang: 'en-GB' },
-  { id: 'en-GB-SoniaNeural', label: 'Coach Sonia (Articulate British Female)', name: 'Sonia', lang: 'en-GB' },
-  { id: 'en-US-BrianNeural', label: 'Coach Brian (Clear & Calm US Male)', name: 'Brian', lang: 'en-US' },
+  {
+    id: 'en-US-AndrewNeural',
+    label: 'Coach Andrew (Warm & Confident US Male)',
+    name: 'Andrew',
+    lang: 'en-US',
+    gender: 'male' as const,
+    pitch: 0.96,
+    rateMultiplier: 1.0,
+  },
+  {
+    id: 'en-US-AriaNeural',
+    label: 'Coach Aria (Expressive US Female)',
+    name: 'Aria',
+    lang: 'en-US',
+    gender: 'female' as const,
+    pitch: 1.08,
+    rateMultiplier: 1.02,
+  },
+  {
+    id: 'en-GB-RyanNeural',
+    label: 'Grandmaster Ryan (Classic British Male)',
+    name: 'Ryan',
+    lang: 'en-GB',
+    gender: 'male' as const,
+    pitch: 0.92,
+    rateMultiplier: 0.96,
+  },
+  {
+    id: 'en-GB-SoniaNeural',
+    label: 'Coach Sonia (Articulate British Female)',
+    name: 'Sonia',
+    lang: 'en-GB',
+    gender: 'female' as const,
+    pitch: 1.05,
+    rateMultiplier: 0.98,
+  },
+  {
+    id: 'en-US-BrianNeural',
+    label: 'Coach Brian (Clear & Calm US Male)',
+    name: 'Brian',
+    lang: 'en-US',
+    gender: 'male' as const,
+    pitch: 0.9,
+    rateMultiplier: 0.95,
+  },
 ] as const;
 
 // In-memory ObjectURL cache for synthesized Edge Neural TTS audio clips
-const edgeAudioCache = new Map<string, string>();
+const audioCache = new Map<string, string>();
 
 // Active HTMLAudioElement and speech generation ID counter
 let activeEdgeAudio: HTMLAudioElement | null = null;
 let currentSpeechId = 0;
 
+const pieceNames: Record<string, string> = {
+  K: 'King',
+  Q: 'Queen',
+  R: 'Rook',
+  B: 'Bishop',
+  N: 'Knight',
+};
+
 /**
  * Formats chess notation into natural phonetic English for TTS engines.
+ * Never produces literal "undefined" on optional capture groups.
  */
 export function formatChessTextForSpeech(text: string): string {
   if (!text) return '';
@@ -31,61 +83,53 @@ export function formatChessTextForSpeech(text: string): string {
     .replace(/\*\*(.*?)\*\*/g, '$1')
     .replace(/\*(.*?)\*/g, '$1')
     .replace(/`(.*?)`/g, '$1')
-    .replace(/#{1,6}\s*/g, '');
+    .replace(/(?:^|\n)#{1,6}\s+/g, ' ');
 
-  // 1. Handle castling FIRST before piece move regexes
+  // 1. Replace O-O-O with 'castles queenside' and O-O with 'castles kingside'
   clean = clean.replace(/\b(?:O-O-O|0-0-0)\b/g, 'castles queenside');
   clean = clean.replace(/\b(?:O-O|0-0)\b/g, 'castles kingside');
 
-  // 2. Convert numerical evaluations like +1.5 -> "plus 1.5" and -0.8 -> "minus 0.8"
-  // BEFORE '+' is converted to " check"
-  clean = clean.replace(/([+-])(\d+(?:\.\d+)?)/g, (_, sign, num) => {
-    return `${sign === '+' ? 'plus' : 'minus'} ${num}`;
-  });
-
-  const pieceMap: Record<string, string> = {
-    K: 'King',
-    Q: 'Queen',
-    R: 'Rook',
-    B: 'Bishop',
-    N: 'Knight',
-  };
-
-  // 3. Convert pawn promotions like e8=Q or d1=N+ before piece moves & check symbols
-  clean = clean.replace(/\b([a-h][18])=([QRBN])(?=[+#\s.,;!?)]|$)/g, (_, sq, promo) => {
-    return `${sq} promotes to ${pieceMap[promo] || promo}`;
-  });
-
-  // 4. Piece captures (e.g., Nxe5, Nxd4+, Bxf7#) - allow trailing + or # before word boundary
+  // 2. Replace pawn promotions \b([a-h][18])=([QRBN])([+#])?(?=\s|[.,!?;:]|$)
   clean = clean.replace(
-    /\b([KQRBN])([a-h1-8]?)x([a-h][1-8])(?=[+#\s.,;!?)]|$)/g,
-    (_, piece, disambig, square) => {
-      const fromPart = disambig ? ` ${disambig}` : '';
-      return `${pieceMap[piece] || piece}${fromPart} takes ${square}`;
+    /\b([a-h][18])=([QRBN])([+#])?(?=\s|[.,!?;:)]|$)/g,
+    (_, sq: string, promo: string, check?: string) => {
+      const promoName = pieceNames[promo] || promo;
+      const suffix = check === '#' ? ' checkmate' : check === '+' ? ' check' : '';
+      return `${sq} promotes to ${promoName}${suffix}`;
     }
   );
 
-  // 5. Pawn captures (e.g., exd5, exd5+, cxb4)
+  // 3. Replace piece moves \b([KQRBN])([a-h])?([1-8])?(x)?([a-h][1-8])([+#])?(?=\s|[.,!?;:]|$)
   clean = clean.replace(
-    /\b([a-h])x([a-h][1-8])(?=[+#\s.,;!?)]|$)/g,
-    (_, file, square) => `${file} takes ${square}`
-  );
-
-  // 6. Standard piece moves (e.g., Nf3, Nf3+, Qh5#, Nbd7, R1e2)
-  clean = clean.replace(
-    /\b([KQRBN])([a-h1-8]?)([a-h][1-8])(?=[+#\s.,;!?)]|$)/g,
-    (_, piece, disambig, square) => {
-      const fromPart = disambig ? ` ${disambig}` : '';
-      return `${pieceMap[piece] || piece}${fromPart} ${square}`;
+    /\b([KQRBN])([a-h])?([1-8])?(x)?([a-h][1-8])([+#])?(?=\s|[.,!?;:)]|$)/g,
+    (_, piece: string, file?: string, rank?: string, capture?: string, square?: string, check?: string) => {
+      const suffix = check === '#' ? ' checkmate' : check === '+' ? ' check' : '';
+      return `${pieceNames[piece] || piece}${file ? ' ' + file : ''}${rank ? ' ' + rank : ''} ${capture ? 'takes' : 'to'} ${square}${suffix}`;
     }
   );
 
-  // 7. Convert check (+) and checkmate (#) symbols AFTER move regexes
-  clean = clean.replace(/#/g, ' checkmate');
-  clean = clean.replace(/\+/g, ' check');
-  clean = clean.replace(/!!/g, ', brilliant move');
+  // 4. Replace pawn captures \b([a-h])x([a-h][1-8])([+#])?(?=\s|[.,!?;:]|$)
+  clean = clean.replace(
+    /\b([a-h])x([a-h][1-8])([+#])?(?=\s|[.,!?;:)]|$)/g,
+    (_, file: string, square: string, check?: string) => {
+      const suffix = check === '#' ? ' checkmate' : check === '+' ? ' check' : '';
+      return `${file} takes ${square}${suffix}`;
+    }
+  );
 
-  // 8. Clean up en passant and extra whitespace
+  // 5. Replace standalone pawn moves with check/mate \b([a-h][1-8])([+#])(?=\s|[.,!?;:]|$)
+  clean = clean.replace(
+    /\b([a-h][1-8])([+#])(?=\s|[.,!?;:)]|$)/g,
+    (_, square: string, check: string) => {
+      return `${square} ${check === '#' ? 'checkmate' : 'check'}`;
+    }
+  );
+
+  // 6. Replace evaluations (?:\s|^)\+(\d+\.\d+) -> ' plus $1' and (?:\s|^)-(\d+\.\d+) -> ' minus $1'
+  clean = clean.replace(/(^|\s)\+(\d+\.\d+)/g, '$1plus $2');
+  clean = clean.replace(/(^|\s)-(\d+\.\d+)/g, '$1minus $2');
+
+  // Clean up en passant and normalize whitespace
   clean = clean.replace(/\be\.p\.\b/gi, 'en passant');
   clean = clean.replace(/\s+/g, ' ').trim();
 
@@ -93,210 +137,127 @@ export function formatChessTextForSpeech(text: string): string {
 }
 
 /**
- * Finds a native Microsoft Natural / Online Edge Neural voice in window.speechSynthesis if installed.
+ * Checks if window.speechSynthesis has a native Microsoft Natural/Online neural voice matching the persona.
  */
 export function findNativeEdgeNeuralVoice(edgeVoiceId: string): SpeechSynthesisVoice | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices || voices.length === 0) return null;
 
-  const voiceMeta = EDGE_VOICES.find((v) => v.id === edgeVoiceId) || EDGE_VOICES[0];
-  const shortPersona = voiceMeta.name.toLowerCase(); // e.g., "andrew", "aria", "ryan", "sonia", "brian"
+  const persona = EDGE_VOICES.find((v) => v.id === edgeVoiceId) || EDGE_VOICES[0];
+  const shortNameLower = persona.name.toLowerCase();
 
-  // Exact match on Microsoft Natural/Online neural voice for the chosen persona
   const exactNatural = voices.find((v) => {
     const nameLower = v.name.toLowerCase();
     const uriLower = (v.voiceURI || '').toLowerCase();
     return (
       uriLower.includes(edgeVoiceId.toLowerCase()) ||
-      (nameLower.includes(shortPersona) && (nameLower.includes('natural') || nameLower.includes('online')))
-    );
-  });
-  if (exactNatural) return exactNatural;
-
-  // Fallback to any Microsoft Natural/Online English voice if available natively
-  const anyMicrosoftNatural = voices.find((v) => {
-    const nameLower = v.name.toLowerCase();
-    return (
-      v.lang.startsWith('en') &&
-      nameLower.includes('microsoft') &&
-      (nameLower.includes('natural') || nameLower.includes('online'))
+      (nameLower.includes(shortNameLower) && (nameLower.includes('natural') || nameLower.includes('online')))
     );
   });
 
-  return anyMicrosoftNatural || null;
+  return exactNatural || null;
 }
 
 /**
- * Selects the best available local browser fallback voice.
+ * Selects the highest-quality local voice matching the US/GB locale and gender of the selected coach persona.
  */
-export function findBestBrowserVoice(preferredLang: string = 'en-US'): SpeechSynthesisVoice | null {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+export function findBestBrowserVoiceForPersona(edgeVoiceId: string): {
+  voice: SpeechSynthesisVoice | null;
+  pitch: number;
+  rateMultiplier: number;
+} {
+  const persona = EDGE_VOICES.find((v) => v.id === edgeVoiceId) || EDGE_VOICES[0];
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    return { voice: null, pitch: persona.pitch, rateMultiplier: persona.rateMultiplier };
+  }
+
   const voices = window.speechSynthesis.getVoices();
-  if (!voices || voices.length === 0) return null;
+  if (!voices || voices.length === 0) {
+    return { voice: null, pitch: persona.pitch, rateMultiplier: persona.rateMultiplier };
+  }
 
   const enVoices = voices.filter((v) => v.lang.startsWith('en'));
-  if (enVoices.length === 0) return voices[0] || null;
+  if (enVoices.length === 0) {
+    return { voice: voices[0] || null, pitch: persona.pitch, rateMultiplier: persona.rateMultiplier };
+  }
 
-  return (
-    enVoices.find((v) => v.name.includes('Natural') || v.name.includes('Online')) ||
-    enVoices.find((v) => v.name.includes('Google') && v.lang === preferredLang) ||
-    enVoices.find((v) => v.name.includes('Google')) ||
-    enVoices.find((v) => v.name.includes('Samantha') || v.name.includes('Daniel')) ||
-    enVoices.find((v) => v.lang === preferredLang) ||
-    enVoices[0]
+  const femaleKeywords = ['female', 'aria', 'sonia', 'jenny', 'samantha', 'victoria', 'karen', 'zira', 'susan', 'hazel', 'libby'];
+  const maleKeywords = ['male', 'andrew', 'ryan', 'brian', 'guy', 'christopher', 'eric', 'daniel', 'alex', 'david', 'mark', 'george', 'oliver', 'arthur'];
+  const targetKeywords = persona.gender === 'female' ? femaleKeywords : maleKeywords;
+
+  const localeVoices = enVoices.filter(
+    (v) => v.lang.replace('_', '-').toLowerCase().startsWith(persona.lang.toLowerCase())
   );
-}
+  const candidatePool = localeVoices.length > 0 ? localeVoices : enVoices;
 
-function escapeSsml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+  const genderMatch =
+    candidatePool.find(
+      (v) =>
+        (v.name.includes('Natural') || v.name.includes('Online') || v.name.includes('Google')) &&
+        targetKeywords.some((kw) => v.name.toLowerCase().includes(kw))
+    ) ||
+    candidatePool.find((v) => targetKeywords.some((kw) => v.name.toLowerCase().includes(kw))) ||
+    candidatePool.find((v) => v.name.includes('Natural') || v.name.includes('Online')) ||
+    candidatePool.find((v) => v.name.includes('Google')) ||
+    candidatePool[0];
+
+  return {
+    voice: genderMatch || enVoices[0] || null,
+    pitch: persona.pitch,
+    rateMultiplier: persona.rateMultiplier,
+  };
 }
 
 /**
- * Synthesizes speech audio using Edge Neural TTS WebSocket protocol with a 4-second timeout
- * and caches the resulting ObjectURL in memory.
+ * Fetches synthesized MP3 audio from the local /api/edge-tts proxy endpoint (with 3.5s timeout and ObjectURL caching).
  */
 export async function synthesizeEdgeNeuralAudio(
   cleanText: string,
   edgeVoice: string = 'en-US-AndrewNeural',
-  rate: number = 1.0
+  _rate: number = 1.0
 ): Promise<string | null> {
-  const cacheKey = `${edgeVoice}:${rate.toFixed(1)}:${cleanText}`;
-  if (edgeAudioCache.has(cacheKey)) {
-    return edgeAudioCache.get(cacheKey)!;
+  const cacheKey = `${edgeVoice}:${cleanText}`;
+  if (audioCache.has(cacheKey)) {
+    return audioCache.get(cacheKey)!;
   }
 
   if (typeof window === 'undefined' || (typeof navigator !== 'undefined' && !navigator.onLine)) {
     return null;
   }
 
-  const ratePct = Math.round((rate - 1.0) * 100);
-  const rateStr = `${ratePct >= 0 ? '+' : ''}${ratePct}%`;
-  const langMatch = edgeVoice.match(/^[a-z]{2}-[A-Z]{2}/);
-  const xmlLang = langMatch ? langMatch[0] : 'en-US';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
 
-  const trustedClientToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-  const reqId = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
-  const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${trustedClientToken}&ConnectionId=${reqId}`;
+  try {
+    const endpoint = `./api/edge-tts?voice=${encodeURIComponent(edgeVoice)}&text=${encodeURIComponent(cleanText)}`;
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
 
-  return new Promise<string | null>((resolve) => {
-    let settled = false;
-    let ws: WebSocket | null = null;
-    const audioChunks: BlobPart[] = [];
-
-    const finish = (url: string | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutId);
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        try {
-          ws.close();
-        } catch {
-          // Ignore
-        }
-      }
-      resolve(url);
-    };
-
-    const timeoutId = setTimeout(() => {
-      finish(null);
-    }, 4000);
-
-    try {
-      ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        if (!ws || settled) return;
-        const timestamp = new Date().toISOString();
-        const configHeader =
-          `X-Timestamp:${timestamp}\r\n` +
-          `Content-Type:application/json; charset=utf-8\r\n` +
-          `Path:speech.config\r\n\r\n` +
-          JSON.stringify({
-            context: {
-              synthesis: {
-                audio: {
-                  metadataoptions: {
-                    sentenceBoundaryEnabled: 'false',
-                    wordBoundaryEnabled: 'false',
-                  },
-                  outputFormat: 'audio-24khz-48kbitrate-mono-mp3',
-                },
-              },
-            },
-          });
-        ws.send(configHeader);
-
-        const ssml =
-          `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${xmlLang}'>` +
-          `<voice name='${edgeVoice}'>` +
-          `<prosody pitch='+0Hz' rate='${rateStr}' volume='+0%'>` +
-          `${escapeSsml(cleanText)}` +
-          `</prosody></voice></speak>`;
-
-        const ssmlHeader =
-          `X-RequestId:${reqId}\r\n` +
-          `Content-Type:application/ssml+xml\r\n` +
-          `X-Timestamp:${timestamp}Z\r\n` +
-          `Path:ssml\r\n\r\n` +
-          ssml;
-
-        ws.send(ssmlHeader);
-      };
-
-      ws.onmessage = (event) => {
-        if (settled) return;
-        if (typeof event.data === 'string') {
-          if (event.data.includes('Path:turn.end')) {
-            if (audioChunks.length > 0) {
-              const blob = new Blob(audioChunks, { type: 'audio/mpeg' });
-              const url = URL.createObjectURL(blob);
-              edgeAudioCache.set(cacheKey, url);
-              finish(url);
-            } else {
-              finish(null);
-            }
-          }
-        } else if (event.data instanceof ArrayBuffer) {
-          const view = new DataView(event.data);
-          if (event.data.byteLength > 2) {
-            const headerLen = view.getUint16(0, false);
-            if (event.data.byteLength > 2 + headerLen) {
-              const mp3Slice = event.data.slice(2 + headerLen);
-              if (mp3Slice.byteLength > 0) {
-                audioChunks.push(mp3Slice);
-              }
-            }
-          }
-        }
-      };
-
-      ws.onerror = () => {
-        finish(null);
-      };
-
-      ws.onclose = () => {
-        if (!settled) {
-          if (audioChunks.length > 0) {
-            const blob = new Blob(audioChunks, { type: 'audio/mpeg' });
-            const url = URL.createObjectURL(blob);
-            edgeAudioCache.set(cacheKey, url);
-            finish(url);
-          } else {
-            finish(null);
-          }
-        }
-      };
-    } catch {
-      finish(null);
+    if (!response.ok) {
+      return null;
     }
-  });
+
+    const contentType = response.headers.get('Content-Type') || '';
+    if (!contentType.includes('audio')) {
+      return null;
+    }
+
+    const blob = await response.blob();
+    if (!blob || blob.size < 100) {
+      return null;
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    audioCache.set(cacheKey, objectUrl);
+    return objectUrl;
+  } catch {
+    clearTimeout(timeoutId);
+    return null;
+  }
 }
 
 /**
@@ -333,6 +294,67 @@ export interface SpeakOptions {
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (err: Error) => void;
+}
+
+/**
+ * Fallback to browser speech synthesis tuned to the selected coach persona's locale, gender, pitch, and rate.
+ */
+function fallbackToBrowserSpeech(
+  cleanText: string,
+  edgeVoice: string,
+  baseRate: number,
+  volume: number,
+  mySpeechId: number,
+  options: SpeakOptions = {}
+): Promise<{ success: boolean; usedEdgeNeural: boolean }> {
+  if (mySpeechId !== currentSpeechId) {
+    return Promise.resolve({ success: false, usedEdgeNeural: false });
+  }
+
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    const err = new Error('Browser speech synthesis is not supported on this device.');
+    options.onError?.(err);
+    return Promise.resolve({ success: false, usedEdgeNeural: false });
+  }
+
+  return new Promise((resolve) => {
+    try {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const { voice, pitch, rateMultiplier } = findBestBrowserVoiceForPersona(edgeVoice);
+      const persona = EDGE_VOICES.find((v) => v.id === edgeVoice) || EDGE_VOICES[0];
+
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang || persona.lang;
+      } else {
+        utterance.lang = persona.lang;
+      }
+
+      utterance.pitch = pitch;
+      utterance.rate = Math.max(0.5, Math.min(2.0, baseRate * rateMultiplier));
+      utterance.volume = volume;
+
+      utterance.onstart = () => options.onStart?.();
+      utterance.onend = () => {
+        options.onEnd?.();
+        resolve({ success: true, usedEdgeNeural: false });
+      };
+      utterance.onerror = (e) => {
+        if (e.error === 'canceled' || e.error === 'interrupted') {
+          resolve({ success: true, usedEdgeNeural: false });
+          return;
+        }
+        const err = new Error(`Browser speech error: ${e.error || 'Playback failed'}`);
+        options.onError?.(err);
+        resolve({ success: false, usedEdgeNeural: false });
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch (e: any) {
+      options.onError?.(e instanceof Error ? e : new Error(String(e)));
+      resolve({ success: false, usedEdgeNeural: false });
+    }
+  });
 }
 
 /**
@@ -375,7 +397,7 @@ export async function speak(
   const volume = Math.max(0, Math.min(1.0, options.volume ?? settings.voiceVolume ?? 1.0));
 
   if (engine === 'edge') {
-    // 1. Check Native Edge Neural Voices First (zero latency on Edge / Windows)
+    // 1. Check if window.speechSynthesis has a native Microsoft Natural/Online neural voice matching the persona
     const nativeEdgeVoice = findNativeEdgeNeuralVoice(edgeVoice);
     if (nativeEdgeVoice && typeof window !== 'undefined' && 'speechSynthesis' in window) {
       return new Promise((resolve) => {
@@ -408,7 +430,7 @@ export async function speak(
       });
     }
 
-    // 2. Synthesize via Edge Neural TTS with in-memory ObjectURL cache
+    // 2. Fetch /api/edge-tts?voice=...&text=... with a 3.5-second timeout and audioCache ObjectURL caching
     const audioUrl = await synthesizeEdgeNeuralAudio(cleanText, edgeVoice, rate);
     if (mySpeechId !== currentSpeechId) {
       return { success: false, usedEdgeNeural: false };
@@ -419,6 +441,7 @@ export async function speak(
         try {
           const audio = new Audio(audioUrl);
           audio.volume = volume;
+          audio.playbackRate = rate;
           activeEdgeAudio = audio;
 
           audio.onplay = () => options.onStart?.();
@@ -447,49 +470,6 @@ export async function speak(
     }
   }
 
-  // 3. Standard Browser SpeechSynthesis (100% Offline or fallback)
-  if (mySpeechId !== currentSpeechId) {
-    return { success: false, usedEdgeNeural: false };
-  }
-
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    const err = new Error('Browser speech synthesis is not supported on this device.');
-    options.onError?.(err);
-    return { success: false, usedEdgeNeural: false };
-  }
-
-  return new Promise((resolve) => {
-    try {
-      const utterance = new SpeechSynthesisUtterance(cleanText);
-      const voiceMeta = EDGE_VOICES.find((v) => v.id === edgeVoice);
-      const bestVoice = findBestBrowserVoice(voiceMeta?.lang || 'en-US');
-      if (bestVoice) {
-        utterance.voice = bestVoice;
-        utterance.lang = bestVoice.lang;
-      }
-      utterance.rate = rate;
-      utterance.volume = volume;
-      utterance.pitch = 1.0;
-
-      utterance.onstart = () => options.onStart?.();
-      utterance.onend = () => {
-        options.onEnd?.();
-        resolve({ success: true, usedEdgeNeural: false });
-      };
-      utterance.onerror = (e) => {
-        if (e.error === 'canceled' || e.error === 'interrupted') {
-          resolve({ success: true, usedEdgeNeural: false });
-          return;
-        }
-        const err = new Error(`Browser speech error: ${e.error || 'Playback failed'}`);
-        options.onError?.(err);
-        resolve({ success: false, usedEdgeNeural: false });
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } catch (e: any) {
-      options.onError?.(e instanceof Error ? e : new Error(String(e)));
-      resolve({ success: false, usedEdgeNeural: false });
-    }
-  });
+  // 3. Fallback to persona-tuned local browser speech synthesis
+  return fallbackToBrowserSpeech(cleanText, edgeVoice, rate, volume, mySpeechId, options);
 }

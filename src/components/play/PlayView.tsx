@@ -23,6 +23,7 @@ import { speechService } from '../../services/speechService';
 import { storageService } from '../../services/storageService';
 import { useLiveCoach } from '../../hooks/useLiveCoach';
 import { geminiService } from '../../services/geminiService';
+import { PostGameReview } from '../PostGameReview';
 import {
   RotateCcw,
   Undo2,
@@ -132,8 +133,9 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [isClockRunning, setIsClockRunning] = useState<boolean>(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Setup Drawer / Panel Toggle
+  // Setup Drawer / Panel Toggle & Post-Game Review
   const [showSetup, setShowSetup] = useState<boolean>(false);
+  const [showPostGameReview, setShowPostGameReview] = useState<boolean>(false);
 
   // Sync active position with global AI Coach
   const lastFenRef = useRef<string>('');
@@ -212,6 +214,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
     setGameResult(null);
     setIsAiThinking(false);
     setShowSetup(false);
+    setShowPostGameReview(false);
 
     let assignedPlayerColor: PieceColor = 'w';
     if (mode === 'ai') {
@@ -339,7 +342,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
         setTimeout(() => setFallbackNotice(null), 4000);
       }
 
-      const move = currGame.move({
+      const nextGame = new Chess(currGame.fen());
+      const move = nextGame.move({
         from: best.from,
         to: best.to,
         promotion: best.promotion || 'q',
@@ -352,11 +356,11 @@ export const PlayView: React.FC<PlayViewProps> = ({
         if (move.captured) soundService.playCapture();
         else soundService.playMove();
 
-        if (currGame.inCheck()) soundService.playCheck();
+        if (nextGame.inCheck()) soundService.playCheck();
 
         // Increment time for AI if time control has increments
         if (selectedTimeControl.incrementSeconds > 0) {
-          if (currGame.turn() === 'b') {
+          if (nextGame.turn() === 'b') {
             setWhiteTime((t) => t + selectedTimeControl.incrementSeconds);
           } else {
             setBlackTime((t) => t + selectedTimeControl.incrementSeconds);
@@ -375,10 +379,11 @@ export const PlayView: React.FC<PlayViewProps> = ({
           after: currentFen,
         };
 
+        setGame(nextGame);
         setLastMove({ from: move.from, to: move.to });
         setMoves((prev) => [...prev, moveRec]);
-        calculateCapturedAndAdvantage(currGame);
-        checkTermination(currGame);
+        calculateCapturedAndAdvantage(nextGame);
+        checkTermination(nextGame);
 
         // Process live coach commentary for opponent move
         const currentSanList = [...moves.map((m) => m.san), move.san];
@@ -429,11 +434,13 @@ export const PlayView: React.FC<PlayViewProps> = ({
       processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
     }
 
-    calculateCapturedAndAdvantage(game);
+    const nextGame = new Chess(moveData.after || game.fen());
+    setGame(nextGame);
+    calculateCapturedAndAdvantage(nextGame);
 
     // Increment time for user
     if (selectedTimeControl.incrementSeconds > 0) {
-      const prevPlayer = game.turn() === 'w' ? 'b' : 'w';
+      const prevPlayer = nextGame.turn() === 'w' ? 'b' : 'w';
       if (prevPlayer === 'w') {
         setWhiteTime((t) => t + selectedTimeControl.incrementSeconds);
       } else {
@@ -441,7 +448,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
       }
     }
 
-    const ended = checkTermination(game);
+    const ended = checkTermination(nextGame);
 
     // Auto-flip board in pass-and-play if enabled
     if (mode === 'pass-and-play' && settings.autoFlipBoard && !ended) {
@@ -449,8 +456,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
     }
 
     // Trigger AI move if in AI mode and it's AI's turn
-    if (mode === 'ai' && !ended && game.turn() !== playerColor) {
-      triggerAiMove(game);
+    if (mode === 'ai' && !ended && nextGame.turn() !== playerColor) {
+      triggerAiMove(nextGame);
     }
   };
 
@@ -691,7 +698,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
           onOpenCoach={onOpenCoach}
           onDismiss={dismissCoachComment}
           onRepeat={repeatCoachComment}
-          onShowBetterMove={(from, to) => setCustomArrow({ from, to, color: '#f59e0b' })}
+          onShowBetterMove={(from, to) => setCustomArrow({ from, to, color: '#10b981' })}
         />
       )}
 
@@ -1048,10 +1055,13 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
             <div className="flex items-center gap-2 pt-2">
               <button
-                onClick={() => setGameResult(null)}
+                onClick={() => {
+                  setGameResult(null);
+                  setShowPostGameReview(true);
+                }}
                 className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl border border-slate-700 transition-colors"
               >
-                Review Board
+                Review Game
               </button>
               <button
                 onClick={startNewGame}
@@ -1060,6 +1070,20 @@ export const PlayView: React.FC<PlayViewProps> = ({
                 Play Again
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post-Game Review Modal */}
+      {showPostGameReview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-xl my-auto">
+            <PostGameReview
+              moves={moves}
+              playerColor={playerColor}
+              settings={settings}
+              onClose={() => setShowPostGameReview(false)}
+            />
           </div>
         </div>
       )}

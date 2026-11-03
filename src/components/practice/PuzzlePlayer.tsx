@@ -9,11 +9,9 @@ import {
   ArrowLeft,
   Lightbulb,
   CheckCircle2,
-  AlertCircle,
   ArrowRight,
   RotateCcw,
   Volume2,
-  Trophy,
 } from 'lucide-react';
 
 interface PuzzlePlayerProps {
@@ -29,7 +27,6 @@ interface PuzzlePlayerProps {
 export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
   puzzle,
   settings,
-  userRating,
   onBack,
   onSolve,
   onFail,
@@ -51,16 +48,30 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
     setShowHintText(false);
   }, [puzzle.id]);
 
-  const handleUserMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
+  const handleUserMove = (moveData: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => {
     if (status !== 'playing') return;
 
+    const fenBeforeUserMove = moveData.before || puzzle.fen;
+    const fenAfterUserMove = moveData.after || game.fen();
+    const gameCopy = new Chess(fenAfterUserMove);
+    setGame(gameCopy);
     setLastMove({ from: moveData.from, to: moveData.to });
 
     const expectedSan = puzzle.solutionMoves[moveIndex];
     const playedSan = moveData.san || '';
     const playedUci = `${moveData.from}${moveData.to}`;
 
-    const isCorrect = playedSan === expectedSan || playedUci === expectedSan || playedSan.startsWith(expectedSan);
+    const isCorrect =
+      playedSan === expectedSan ||
+      playedUci === expectedSan ||
+      playedSan.startsWith(expectedSan);
 
     if (isCorrect) {
       const nextIndex = moveIndex + 1;
@@ -74,12 +85,14 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
         onSolve(puzzle.id, change);
       } else {
         soundService.playMove();
-        // Opponent counter-move if multi-move puzzle
+        // Opponent counter-move if multi-move puzzle using fresh Chess instance from fenAfterUserMove
         setTimeout(() => {
           const oppMove = puzzle.solutionMoves[nextIndex];
           if (oppMove) {
-            const res = game.move(oppMove);
+            const replyGame = new Chess(fenAfterUserMove);
+            const res = replyGame.move(oppMove);
             if (res) {
+              setGame(replyGame);
               setLastMove({ from: res.from, to: res.to });
               setMoveIndex(nextIndex + 1);
               soundService.playMove();
@@ -94,7 +107,8 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
       onFail(puzzle.id, -8);
 
       setTimeout(() => {
-        game.undo();
+        const revertGame = new Chess(fenBeforeUserMove);
+        setGame(revertGame);
         setStatus('playing');
       }, 700);
     }
