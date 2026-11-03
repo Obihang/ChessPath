@@ -1,8 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
-import { storageService } from './storageService';
+import { storageService, PROGRESS_KEY } from './storageService';
 import { GEMINI_MODELS } from '../constants/aiModels';
-import { pcmToWav, base64ToArrayBuffer, stripMarkdown, processRawPcmOrWavToProcessedWav, processPcmToFloat32, float32ToPcm } from '../utils/audioUtils';
-import { audioCacheService } from './audioCacheService';
+import { base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
 
 export { base64ToArrayBuffer };
 
@@ -12,17 +11,40 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
 }
 
 /**
- * Resolves the client-side API key for Gemini features (Voice TTS / STT, and Gemini text).
- * Does NOT pick up third-party text provider keys (Groq, OpenRouter, OpenAI, etc.).
- * Stored locally in user's browser settings.
+ * Resolves the Gemini API key by checking user's saved `geminiApiKey` in localStorage
+ * (`chesspath_progress_v1` first, then `chesspath_settings_v1`), falling back to `process.env.GEMINI_API_KEY`.
  */
 export function getGeminiVoiceApiKey(customKey?: string): string {
+  let progressKey = '';
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.geminiApiKey === 'string') {
+          progressKey = parsed.geminiApiKey.trim();
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
   const settings = storageService.getSettings();
   const envKey =
     (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
     (typeof process !== 'undefined' && process.env ? process.env.GEMINI_API_KEY : '') ||
     '';
-  const rawKey = (customKey || settings.geminiApiKey || (settings.aiProvider === 'gemini' ? settings.aiApiKey : '') || envKey || '').trim();
+
+  const rawKey = (
+    customKey ||
+    progressKey ||
+    settings.geminiApiKey ||
+    (settings.aiProvider === 'gemini' ? settings.aiApiKey : '') ||
+    envKey ||
+    ''
+  ).trim();
+
   return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
 }
 
@@ -39,9 +61,6 @@ export function getTextProviderApiKey(customKey?: string): string {
   return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
 }
 
-/**
- * Backward compatibility helper for general callers.
- */
 export function getActiveApiKey(customKey?: string): string {
   return getTextProviderApiKey(customKey);
 }
@@ -60,9 +79,9 @@ function getGeminiClient(customKey?: string): GoogleGenAI | null {
   }
 }
 
-export const DEFAULT_TEXT_MODEL = 'gemini-3.8-flash';
-export const FALLBACK_TEXT_MODEL = 'gemini-flash-latest';
-let rememberedTextModel = DEFAULT_TEXT_MODEL;
+export const DEFAULT_TEXT_MODEL = GEMINI_MODELS.TEXT_PRIMARY;
+export const FALLBACK_TEXT_MODEL = GEMINI_MODELS.TEXT_FALLBACK;
+let rememberedTextModel: string = DEFAULT_TEXT_MODEL;
 
 export function getActiveTextModel(): string {
   return rememberedTextModel;
@@ -104,12 +123,10 @@ async function callOpenAICompatible(
       defaultModel = settings.aiModelName || 'Qwen/Qwen2.5-72B-Instruct';
       break;
     case 'custom':
-      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
-      defaultModel = settings.aiModelName || 'gpt-3.5-turbo';
-      break;
     default:
       baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
       defaultModel = settings.aiModelName || 'gpt-3.5-turbo';
+      break;
   }
 
   const formattedMessages: any[] = [];
@@ -215,7 +232,7 @@ Keep your answer concise (2-3 short paragraphs), warm, encouraging, and clear wi
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: rememberedTextModel,
         contents: prompt,
       });
 
@@ -254,7 +271,7 @@ Provide a gentle nudge (1-2 sentences) pointing to the relevant sector of the bo
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: rememberedTextModel,
         contents: prompt,
       });
 
@@ -294,7 +311,7 @@ Keep the tone encouraging, constructive, and inspiring!`;
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: rememberedTextModel,
         contents: prompt,
       });
 
@@ -353,7 +370,7 @@ Keep the tone encouraging, constructive, and inspiring!`;
   async generateLiveCommentary(
     prompt: string,
     systemInstruction: string,
-    maxSentences: number = 2
+    _maxSentences: number = 2
   ): Promise<string> {
     const settings = storageService.getSettings();
     const provider = settings.aiProvider || 'gemini';
@@ -377,9 +394,6 @@ Keep the tone encouraging, constructive, and inspiring!`;
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           systemInstruction,
-          maxOutputTokens: 60,
-          temperature: 0.7,
-          thinkingConfig: { thinkingLevel: 'LOW' as any },
         },
       });
       return response.text || '';
@@ -396,225 +410,11 @@ Keep the tone encouraging, constructive, and inspiring!`;
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           config: {
             systemInstruction,
-            maxOutputTokens: 60,
-            temperature: 0.7,
-            thinkingConfig: { thinkingLevel: 'LOW' as any },
           },
         });
         return fallbackRes.text || '';
       }
       throw e;
-    }
-  },
-
-  async generateNaturalVoiceStream(
-    text: string,
-    onChunk: (pcmBuffer: ArrayBuffer) => void,
-    customKey?: string
-  ): Promise<{ success: boolean; error?: string }> {
-    const settings = storageService.getSettings();
-    const voiceName = settings.geminiVoice || 'Kore';
-    const cleanText = stripMarkdown(text).slice(0, 500);
-
-    if (!cleanText) {
-      return { success: false, error: 'Empty text' };
-    }
-
-    const ai = getGeminiClient(customKey || settings.geminiApiKey);
-    if (!ai) {
-      return { success: false, error: 'NO_KEY' };
-    }
-
-    const requestBody = {
-      contents: [{ role: 'user', parts: [{ text: cleanText }] }],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
-          },
-        },
-      },
-    };
-
-    try {
-      const responseStream = await ai.models.generateContentStream({
-        model: GEMINI_MODELS.TTS_PRIMARY,
-        ...requestBody,
-      });
-
-      let receivedAny = false;
-      let carryByte: number | null = null;
-      let accumulatedBytes: number[] = [];
-
-      for await (const chunk of responseStream) {
-        const parts = chunk.candidates?.[0]?.content?.parts || [];
-        for (const p of parts) {
-          if (p.inlineData?.data) {
-            receivedAny = true;
-            const chunkBuffer = base64ToArrayBuffer(p.inlineData.data);
-            const chunkBytes = new Uint8Array(chunkBuffer);
-
-            let combined: Uint8Array;
-            if (carryByte !== null) {
-              combined = new Uint8Array(chunkBytes.length + 1);
-              combined[0] = carryByte;
-              combined.set(chunkBytes, 1);
-              carryByte = null;
-            } else {
-              combined = chunkBytes;
-            }
-
-            let processLen = combined.length;
-            if (processLen % 2 !== 0) {
-              carryByte = combined[combined.length - 1];
-              processLen -= 1;
-            }
-
-            if (processLen > 0) {
-              const evenBytes = combined.subarray(0, processLen);
-              for (let i = 0; i < evenBytes.length; i++) {
-                accumulatedBytes.push(evenBytes[i]);
-              }
-            }
-
-            // Hold back final 120 ms (5760 bytes at 24kHz 16-bit mono)
-            const holdBackBytes = 5760;
-            if (accumulatedBytes.length > holdBackBytes) {
-              const sendLen = accumulatedBytes.length - holdBackBytes;
-              const sendBuf = new Uint8Array(sendLen);
-              for (let i = 0; i < sendLen; i++) {
-                sendBuf[i] = accumulatedBytes.shift()!;
-              }
-              onChunk(sendBuf.buffer);
-            }
-          }
-        }
-      }
-
-      if (accumulatedBytes.length > 0) {
-        const finalBuf = new Uint8Array(accumulatedBytes);
-        const float32Final = processPcmToFloat32(finalBuf.buffer, {
-          isFullClip: false,
-          isFirstChunk: false,
-          isLastChunk: true,
-          sampleRate: 24000,
-        });
-        const pcm16Final = float32ToPcm(float32Final);
-        onChunk(pcm16Final);
-      }
-
-      if (!receivedAny) {
-        return { success: false, error: 'No audio chunks' };
-      }
-
-      return { success: true };
-    } catch (e: any) {
-      console.warn('Streaming TTS failed:', e);
-      return { success: false, error: e?.message || 'Streaming failed' };
-    }
-  },
-
-  async generateNaturalVoice(
-    text: string,
-    customKey?: string
-  ): Promise<{ success: boolean; audioUrl?: string; audioBuffer?: ArrayBuffer; error?: string }> {
-    const settings = storageService.getSettings();
-    const voiceName = settings.geminiVoice || 'Kore';
-    const cleanText = stripMarkdown(text).slice(0, 500);
-
-    if (!cleanText) {
-      return { success: false, error: 'Empty text to speak.' };
-    }
-
-    // 1. Check IndexedDB cache
-    const cachedWav = await audioCacheService.getClip(cleanText, voiceName);
-    if (cachedWav) {
-      const audioUrl = arrayBufferToBlobUrl(cachedWav, 'audio/wav');
-      return { success: true, audioUrl, audioBuffer: cachedWav };
-    }
-
-    // 2. Initialize Gemini Voice Client (Voice always uses Gemini key)
-    const ai = getGeminiClient(customKey || settings.geminiApiKey);
-    if (!ai) {
-      return { success: false, error: 'NO_KEY: No Gemini API key found for voice features.' };
-    }
-
-    const requestBody = {
-      contents: [{ role: 'user', parts: [{ text: cleanText }] }],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
-          },
-        },
-      },
-    };
-
-    try {
-      let rawBase64: string | undefined;
-      let modelUsed: string = GEMINI_MODELS.TTS_PRIMARY;
-
-      try {
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODELS.TTS_PRIMARY,
-          ...requestBody,
-        });
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        for (const p of parts) {
-          if (p.inlineData?.data) {
-            rawBase64 = p.inlineData.data;
-            break;
-          }
-        }
-      } catch (primaryErr: any) {
-        const errMsg = primaryErr?.message || '';
-        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('NotFound')) {
-          console.warn(`TTS Model ${GEMINI_MODELS.TTS_PRIMARY} unavailable, retrying with ${GEMINI_MODELS.TTS_FALLBACK}...`);
-          modelUsed = GEMINI_MODELS.TTS_FALLBACK;
-          const fallbackRes = await ai.models.generateContent({
-            model: GEMINI_MODELS.TTS_FALLBACK,
-            ...requestBody,
-          });
-          const parts = fallbackRes.candidates?.[0]?.content?.parts || [];
-          for (const p of parts) {
-            if (p.inlineData?.data) {
-              rawBase64 = p.inlineData.data;
-              break;
-            }
-          }
-        } else {
-          throw primaryErr;
-        }
-      }
-
-      if (!rawBase64) {
-        return {
-          success: false,
-          error: 'Gemini TTS responded without audio data.',
-        };
-      }
-
-      const pcmBuffer = base64ToArrayBuffer(rawBase64);
-      const processedWav = processRawPcmOrWavToProcessedWav(pcmBuffer, 24000);
-      const audioUrl = arrayBufferToBlobUrl(processedWav, 'audio/wav');
-
-      // Cache clip in IndexedDB
-      await audioCacheService.saveClip(cleanText, voiceName, processedWav);
-
-      return { success: true, audioUrl, audioBuffer: processedWav };
-    } catch (e: any) {
-      console.warn('Gemini TTS error:', e);
-      let errMsg = e?.message || 'Gemini TTS request failed.';
-      if (errMsg.includes('API key not valid') || errMsg.includes('API_KEY_INVALID') || errMsg.includes('401') || errMsg.includes('403')) {
-        errMsg = 'Invalid Gemini API key. Please check your key in Settings.';
-      } else if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429')) {
-        errMsg = 'Gemini API quota reached (429). Speech paused.';
-      } else if (errMsg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
-        errMsg = 'Offline / No internet connection.';
-      }
-      return { success: false, error: errMsg };
     }
   },
 
@@ -684,10 +484,6 @@ Keep the tone encouraging, constructive, and inspiring!`;
     }
   },
 
-  async testVoiceConnection(key?: string): Promise<{ success: boolean; audioUrl?: string; audioBuffer?: ArrayBuffer; error?: string }> {
-    return this.generateNaturalVoice('Welcome to ChessPath! Your mentor is ready.', key);
-  },
-
   async testProviderConnection(options?: {
     provider?: string;
     apiKey?: string;
@@ -709,7 +505,7 @@ Keep the tone encouraging, constructive, and inspiring!`;
       }
       try {
         const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: rememberedTextModel,
           contents: 'Say "Chess coach connection verified!" in one short sentence.',
         });
         return { success: true, reply: response.text?.trim() || 'Connected to Gemini successfully!' };
@@ -719,7 +515,6 @@ Keep the tone encouraging, constructive, and inspiring!`;
       }
     }
 
-    // OpenAI-compatible providers: groq, openrouter, bytez, openai, custom
     let baseUrl = options?.baseUrl || settings.aiBaseUrl || '';
     let modelName = options?.modelName || settings.aiModelName || '';
 
@@ -727,7 +522,6 @@ Keep the tone encouraging, constructive, and inspiring!`;
       if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
       else if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1';
       else if (provider === 'bytez') baseUrl = 'https://api.bytez.com/v1';
-      else if (provider === 'openai') baseUrl = 'https://api.openai.com/v1';
       else baseUrl = 'https://api.openai.com/v1';
     }
 

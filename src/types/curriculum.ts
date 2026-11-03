@@ -1,4 +1,4 @@
-import { PieceColor } from './chess';
+import { PieceColor, TTSEngineType } from './chess';
 
 export interface LessonStep {
   instruction: string;
@@ -109,4 +109,7 @@ export interface UserProgress {
   lastActiveDate: string;
   gamesPlayed: number;
   gamesWon: number;
+  ttsEngine?: TTSEngineType;
+  edgeVoice?: string;
+  geminiApiKey?: string;
 }

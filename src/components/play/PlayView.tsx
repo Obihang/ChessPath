@@ -118,7 +118,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   // Pre-generate verdict audio clips & precompute player turns
   useEffect(() => {
     speechService.pregenerateVerdictPhrases(settings).catch(() => {});
-  }, [settings.geminiVoice, settings.voiceEnabled]);
+  }, [settings.edgeVoice, settings.ttsEngine, settings.voiceEnabled]);
 
   useEffect(() => {
     if (game && !gameResult && game.turn() === playerColor) {
@@ -339,7 +339,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
         setTimeout(() => setFallbackNotice(null), 4000);
       }
 
-      const prevFen = currGame.fen();
       const move = currGame.move({
         from: best.from,
         to: best.to,
@@ -347,6 +346,9 @@ export const PlayView: React.FC<PlayViewProps> = ({
       });
 
       if (move) {
+        const prevFen = move.before;
+        const currentFen = move.after;
+
         if (move.captured) soundService.playCapture();
         else soundService.playMove();
 
@@ -368,7 +370,9 @@ export const PlayView: React.FC<PlayViewProps> = ({
           color: move.color,
           piece: move.piece,
           captured: move.captured,
-          fen: currGame.fen(),
+          fen: currentFen,
+          before: prevFen,
+          after: currentFen,
         };
 
         setLastMove({ from: move.from, to: move.to });
@@ -378,7 +382,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
         // Process live coach commentary for opponent move
         const currentSanList = [...moves.map((m) => m.san), move.san];
-        processCoachMove(moveRec, prevFen, currGame.fen(), false, currentSanList);
+        processCoachMove(moveRec, prevFen, currentFen, false, currentSanList);
       }
     } catch (e) {
       console.warn('AI move calculation failed', e);
@@ -388,16 +392,24 @@ export const PlayView: React.FC<PlayViewProps> = ({
   };
 
   // Handle User Move on Board
-  const handleUserMove = (moveData: { from: string; to: string; promotion?: string; san?: string }) => {
+  const handleUserMove = (moveData: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => {
     speechService.unlock();
     setLastMove({ from: moveData.from, to: moveData.to });
 
-    const prevFen =
-      moves.length > 0 ? moves[moves.length - 1].fen : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     const history = game.history({ verbose: true });
     const lastHist = history[history.length - 1];
 
     if (lastHist) {
+      const prevFen = moveData.before || lastHist.before;
+      const currentFen = moveData.after || lastHist.after;
+
       const userMoveRec: MoveRecord = {
         san: lastHist.san,
         from: lastHist.from,
@@ -405,14 +417,16 @@ export const PlayView: React.FC<PlayViewProps> = ({
         color: lastHist.color,
         piece: lastHist.piece,
         captured: lastHist.captured,
-        fen: game.fen(),
+        fen: currentFen,
+        before: prevFen,
+        after: currentFen,
       };
       setMoves((prev) => [...prev, userMoveRec]);
 
-      // Process live coach commentary for player move
+      // Process live coach commentary for player move using exact move.before and move.after FENs
       setCustomArrow(null);
       const currentSanList = [...moves.map((m) => m.san), lastHist.san];
-      processCoachMove(userMoveRec, prevFen, game.fen(), true, currentSanList);
+      processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
     }
 
     calculateCapturedAndAdvantage(game);

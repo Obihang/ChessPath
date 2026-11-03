@@ -32,7 +32,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
   const [isTestingSpeech, setIsTestingSpeech] = useState(false);
   const [isTestingBeep, setIsTestingBeep] = useState(false);
 
-  // Subscribe to live diagnostic updates
   useEffect(() => {
     const update = () => {
       setLogs([...speechService.getDiagnosticLogs()]);
@@ -55,7 +54,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
     speechService.logDiagnostic('info', 'Manual diagnostic test initiated by user click.');
 
     speechService.speakWithCoach(
-      'Diagnostic test. The ChessPath Gemini voice coach is active and ready on your device.',
+      "Hello! I am your chess coach. Let's find the best move together.",
       settings,
       {
         onStart: () => setIsTestingSpeech(true),
@@ -114,6 +113,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
   const isMuted = !settings.voiceEnabled;
   const isVolumeZero = settings.voiceVolume <= 0;
+  const activeEngine = settings.ttsEngine || (settings.useNaturalVoice === false ? 'browser' : 'edge');
 
   return (
     <div className="bg-slate-950/70 border border-slate-800 rounded-xl overflow-hidden text-xs">
@@ -155,7 +155,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
         {/* Status Indicators Pill Bar */}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
           <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300 font-medium">
-            Engine: Gemini TTS (WAV/AudioContext)
+            Engine: {activeEngine === 'edge' ? 'Edge Neural TTS' : 'Standard Device TTS'}
           </span>
 
           <span
@@ -169,7 +169,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
           </span>
 
           <span className="px-2 py-0.5 rounded-full border bg-slate-800 border-slate-700 text-slate-300 font-medium">
-            Voice: {settings.geminiVoice || 'Kore'}
+            Voice: {settings.edgeVoice || 'en-US-AndrewNeural'}
           </span>
 
           <span
@@ -214,12 +214,12 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
             {isTestingSpeech ? (
               <>
                 <Radio className="w-3 h-3 animate-spin text-amber-400" />
-                <span>Generating Voice...</span>
+                <span>Speaking...</span>
               </>
             ) : (
               <>
                 <Play className="w-3 h-3" />
-                <span>Test Gemini Voice</span>
+                <span>Test Coach Voice</span>
               </>
             )}
           </button>
@@ -291,7 +291,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
       <div className={`overflow-y-auto p-2 space-y-1 font-mono text-[11px] ${compact ? 'max-h-48' : 'max-h-64'}`}>
         {filteredLogs.length === 0 ? (
           <div className="py-6 text-center text-slate-500 font-sans text-xs">
-            No diagnostic events recorded yet. Click <strong>Test Gemini Voice</strong> above to test audio output.
+            No diagnostic events recorded yet. Click <strong>Test Coach Voice</strong> above to test audio output.
           </div>
         ) : (
           filteredLogs.map((entry) => {

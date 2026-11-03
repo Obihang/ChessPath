@@ -1,15 +1,15 @@
-name: Build Android Debug APK
+name: Verify Web & Build Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build Android APK
+  verify-web:
+    name: Verify Web TypeScript & Build
     runs-on: ubuntu-latest
 
     steps:
@@ -23,13 +23,35 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Validate content
-        run: npm run validate
+        run: npm ci
 
       - name: Run linter and type check
         run: npm run lint
+
+      - name: Validate chess curriculum & puzzles
+        run: npm run validate
+
+      - name: Build web application
+        run: npm run build
+
+  build-android-apk:
+    name: Build Android Debug APK (main only)
+    needs: verify-web
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build web application for Android
         run: npm run build

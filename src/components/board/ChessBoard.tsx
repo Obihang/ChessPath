@@ -12,7 +12,14 @@ export interface ChessBoardProps {
   disabled?: boolean;
   lastMove?: { from: string; to: string } | null;
   customArrow?: { from: string; to: string; color?: string } | null;
-  onMove?: (move: { from: string; to: string; promotion?: string; san?: string }) => void;
+  onMove?: (move: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => void;
 }
 
 const BOARD_THEMES: Record<
@@ -44,6 +51,34 @@ const BOARD_THEMES: Record<
     dark: '#4a6886',
     selected: 'rgba(56, 189, 248, 0.45)',
     lastMove: 'rgba(56, 189, 248, 0.25)',
+    check: 'rgba(239, 68, 68, 0.65)',
+  },
+  blue: {
+    light: '#dee3e6',
+    dark: '#8ca2ad',
+    selected: 'rgba(56, 189, 248, 0.45)',
+    lastMove: 'rgba(56, 189, 248, 0.25)',
+    check: 'rgba(239, 68, 68, 0.65)',
+  },
+  iceland: {
+    light: '#e2e8f0',
+    dark: '#64748b',
+    selected: 'rgba(56, 189, 248, 0.45)',
+    lastMove: 'rgba(56, 189, 248, 0.25)',
+    check: 'rgba(239, 68, 68, 0.65)',
+  },
+  glass: {
+    light: '#cbd5e1',
+    dark: '#475569',
+    selected: 'rgba(245, 158, 11, 0.45)',
+    lastMove: 'rgba(217, 119, 6, 0.28)',
+    check: 'rgba(239, 68, 68, 0.65)',
+  },
+  dark: {
+    light: '#94a3b8',
+    dark: '#334155',
+    selected: 'rgba(245, 158, 11, 0.45)',
+    lastMove: 'rgba(217, 119, 6, 0.28)',
     check: 'rgba(239, 68, 68, 0.65)',
   },
 };
@@ -165,7 +200,14 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
         setSelectedSquare(null);
         setLegalMoves([]);
         setPendingPromotion(null);
-        onMove?.({ from, to, promotion, san: move.san });
+        onMove?.({
+          from,
+          to,
+          promotion,
+          san: move.san,
+          before: move.before,
+          after: move.after,
+        });
       }
     } catch {
       soundService.playIllegal();

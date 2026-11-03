@@ -140,6 +140,7 @@ export default function App() {
       {/* Top Application Bar */}
       <TopBar
         soundEnabled={settings.soundEnabled}
+        ttsEngine={settings.ttsEngine}
         onToggleSound={handleToggleSound}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenCoach={() => setIsCoachOpen(true)}

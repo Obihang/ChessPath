@@ -2,9 +2,11 @@ import React from 'react';
 import { Volume2, VolumeX, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import { soundService } from '../../services/audioService';
 import { PWAInstallButton } from './PWAInstallButton';
+import { TTSEngineType } from '../../types/chess';
 
 interface TopBarProps {
   soundEnabled: boolean;
+  ttsEngine?: TTSEngineType;
   onToggleSound: () => void;
   onOpenSettings: () => void;
   onOpenCoach?: () => void;
@@ -12,6 +14,7 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({
   soundEnabled,
+  ttsEngine = 'edge',
   onToggleSound,
   onOpenSettings,
   onOpenCoach,
@@ -24,9 +27,12 @@ export const TopBar: React.FC<TopBarProps> = ({
           <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-slate-950 font-black text-lg shadow-md shadow-amber-500/20">
             ♟
           </div>
-          <div>
+          <div className="flex items-center gap-2">
             <span className="text-base font-bold tracking-tight text-slate-100">
               ChessPath
+            </span>
+            <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/25">
+              {ttsEngine === 'edge' ? 'Edge Neural' : 'Offline TTS'}
             </span>
           </div>
         </div>

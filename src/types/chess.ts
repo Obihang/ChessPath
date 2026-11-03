@@ -11,7 +11,7 @@ export type Square =
   | 'a2' | 'b2' | 'c2' | 'd2' | 'e2' | 'f2' | 'g2' | 'h2'
   | 'a1' | 'b1' | 'c1' | 'd1' | 'e1' | 'f1' | 'g1' | 'h1';
 
-export type BoardThemeId = 'walnut' | 'green' | 'slate';
+export type BoardThemeId = 'walnut' | 'green' | 'slate' | 'blue' | 'iceland' | 'glass' | 'dark';
 
 export interface BoardTheme {
   id: BoardThemeId;
@@ -49,6 +49,8 @@ export interface MoveRecord {
   captured?: PieceType;
   promotion?: PieceType;
   fen: string;
+  before?: string;
+  after?: string;
 }
 
 export type GameTermination =
@@ -67,6 +69,7 @@ export interface GameResult {
 }
 
 export type AIProviderId = 'gemini' | 'groq' | 'openrouter' | 'openai' | 'bytez' | 'custom';
+export type TTSEngineType = 'edge' | 'browser';
 
 export interface AppSettings {
   boardTheme: BoardThemeId;
@@ -82,6 +85,8 @@ export interface AppSettings {
   voiceEnabled: boolean;
   voiceRate: number;
   voiceVolume: number;
+  ttsEngine: TTSEngineType;
+  edgeVoice: string;
   geminiVoice: string;
   useNaturalVoice: boolean;
   pieceSet: string;

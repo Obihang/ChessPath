@@ -1,32 +1,68 @@
 /**
- * Centralized Gemini model constants and prebuilt voices.
- * Verified against official Google AI Studio Gemini API documentation.
+ * Centralized AI model constants and curated Edge Neural Coach voices.
  */
 
 export const GEMINI_MODELS = {
   // Basic & Complex Text Tasks
-  TEXT_PRIMARY: 'gemini-3.8-flash',
-  TEXT_FALLBACK: 'gemini-flash-latest',
-
-  // Text-to-Speech (TTS)
-  TTS_PRIMARY: 'gemini-3.8-flash-lite-tts',
-  TTS_FALLBACK: 'gemini-3.8-flash-tts',
+  TEXT_PRIMARY: 'gemini-3-flash-preview',
+  TEXT_FALLBACK: 'gemini-2.5-flash',
 
   // Audio Transcription (STT)
   STT_PRIMARY: 'gemini-3.5-transcribe',
-  STT_FALLBACK: 'gemini-3.8-flash',
+  STT_FALLBACK: 'gemini-3-flash-preview',
 } as const;
 
-export interface GeminiVoiceOption {
+export interface EdgeVoiceOption {
   id: string;
   name: string;
+  label: string;
   description: string;
+  lang: string;
+  shortName: string;
 }
 
-export const GEMINI_PREBUILT_VOICES: GeminiVoiceOption[] = [
-  { id: 'Kore', name: 'Kore', description: 'Calm, clear, balanced female voice' },
-  { id: 'Puck', name: 'Puck', description: 'Upbeat, enthusiastic male voice' },
-  { id: 'Charon', name: 'Charon', description: 'Deep, resonant, authoritative male voice' },
-  { id: 'Fenrir', name: 'Fenrir', description: 'Energetic, confident male voice' },
-  { id: 'Aoede', name: 'Aoede', description: 'Warm, expressive female voice' },
+export const EDGE_NEURAL_VOICES: EdgeVoiceOption[] = [
+  {
+    id: 'en-US-AndrewNeural',
+    name: 'Coach Andrew',
+    label: 'Coach Andrew (Warm & Confident US Male)',
+    description: 'Warm & Confident US Male',
+    lang: 'en-US',
+    shortName: 'Andrew',
+  },
+  {
+    id: 'en-US-AriaNeural',
+    name: 'Coach Aria',
+    label: 'Coach Aria (Expressive US Female)',
+    description: 'Expressive US Female',
+    lang: 'en-US',
+    shortName: 'Aria',
+  },
+  {
+    id: 'en-GB-RyanNeural',
+    name: 'Grandmaster Ryan',
+    label: 'Grandmaster Ryan (Classic British Male)',
+    description: 'Classic British Male',
+    lang: 'en-GB',
+    shortName: 'Ryan',
+  },
+  {
+    id: 'en-GB-SoniaNeural',
+    name: 'Coach Sonia',
+    label: 'Coach Sonia (Articulate British Female)',
+    description: 'Articulate British Female',
+    lang: 'en-GB',
+    shortName: 'Sonia',
+  },
+  {
+    id: 'en-US-BrianNeural',
+    name: 'Coach Brian',
+    label: 'Coach Brian (Clear & Calm US Male)',
+    description: 'Clear & Calm US Male',
+    lang: 'en-US',
+    shortName: 'Brian',
+  },
 ];
+
+// Alias for backward compatibility in any component importing GEMINI_PREBUILT_VOICES
+export const GEMINI_PREBUILT_VOICES = EDGE_NEURAL_VOICES;
