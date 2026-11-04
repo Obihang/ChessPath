@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CURRICULUM_LEVELS } from '../../data/lessonsData';
 import { Lesson, CurriculumLevel } from '../../types/curriculum';
-import { AppSettings } from '../../types/chess';
+import { AppSettings, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { LessonPlayer } from './LessonPlayer';
 import { QuizModal } from './QuizModal';
 import {
@@ -15,6 +15,8 @@ import {
 
 interface LearnViewProps {
   settings: AppSettings;
+  coachPersonality?: CoachPersonality;
+  coachVerbosity?: CoachVerbosity;
   completedLessonIds: string[];
   passedQuizLevelIds: number[];
   onCompleteLesson: (lessonId: string) => void;
@@ -23,6 +25,8 @@ interface LearnViewProps {
 
 export const LearnView: React.FC<LearnViewProps> = ({
   settings,
+  coachPersonality,
+  coachVerbosity,
   completedLessonIds,
   passedQuizLevelIds,
   onCompleteLesson,
@@ -36,6 +40,8 @@ export const LearnView: React.FC<LearnViewProps> = ({
       <LessonPlayer
         lesson={selectedLesson}
         settings={settings}
+        coachPersonality={coachPersonality || settings.coachPersonality}
+        coachVerbosity={coachVerbosity || settings.coachVerbosity}
         onBack={() => setSelectedLesson(null)}
         onComplete={(id) => {
           onCompleteLesson(id);

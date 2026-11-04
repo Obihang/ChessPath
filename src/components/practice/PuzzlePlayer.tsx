@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Chess } from 'chess.js';
 import { PuzzleItem } from '../../types/curriculum';
-import { AppSettings } from '../../types/chess';
+import { AppSettings, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
 import { soundService } from '../../services/audioService';
 import { speechService } from '../../services/speechService';
+import { askCoach } from '../../services/coachService';
 import {
   ArrowLeft,
   Lightbulb,
@@ -12,11 +13,15 @@ import {
   ArrowRight,
   RotateCcw,
   Volume2,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 
-interface PuzzlePlayerProps {
+export interface PuzzlePlayerProps {
   puzzle: PuzzleItem;
   settings: AppSettings;
+  coachPersonality?: CoachPersonality;
+  coachVerbosity?: CoachVerbosity;
   userRating: number;
   onBack: () => void;
   onSolve: (puzzleId: string, ratingChange: number) => void;
@@ -27,6 +32,8 @@ interface PuzzlePlayerProps {
 export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
   puzzle,
   settings,
+  coachPersonality,
+  coachVerbosity,
   onBack,
   onSolve,
   onFail,
@@ -38,6 +45,13 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
   const [status, setStatus] = useState<'playing' | 'solved' | 'failed'>('playing');
   const [hintUsed, setHintUsed] = useState(false);
   const [showHintText, setShowHintText] = useState(false);
+  const [coachAdvice, setCoachAdvice] = useState<string | null>(null);
+  const [isAskingCoach, setIsAskingCoach] = useState(false);
+
+  const effectivePersonality: CoachPersonality =
+    coachPersonality || settings.coachPersonality || 'strict';
+  const effectiveVerbosity: CoachVerbosity =
+    coachVerbosity || settings.coachVerbosity || 'detailed';
 
   useEffect(() => {
     setGame(new Chess(puzzle.fen));
@@ -46,7 +60,35 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
     setStatus('playing');
     setHintUsed(false);
     setShowHintText(false);
+    setCoachAdvice(null);
   }, [puzzle.id]);
+
+  const handleAskCoach = async () => {
+    if (isAskingCoach) return;
+    speechService.unlock();
+    setIsAskingCoach(true);
+    try {
+      const response = await askCoach(
+        game.fen(),
+        `Tactical Puzzle: ${puzzle.title} (Theme: ${puzzle.theme}) — ${puzzle.description}. Hint: ${puzzle.hint}`,
+        puzzle.solutionMoves.slice(0, moveIndex),
+        undefined,
+        effectivePersonality,
+        effectiveVerbosity
+      );
+      setCoachAdvice(response);
+      if (settings.voiceEnabled) {
+        setIsSpeaking(true);
+        await speechService.speakWithCoach(response, settings, {
+          onStart: () => setIsSpeaking(true),
+          onEnd: () => setIsSpeaking(false),
+          onError: () => setIsSpeaking(false),
+        });
+      }
+    } finally {
+      setIsAskingCoach(false);
+    }
+  };
 
   const handleUserMove = (moveData: {
     from: string;
@@ -119,6 +161,7 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
     setMoveIndex(0);
     setLastMove(null);
     setStatus('playing');
+    setCoachAdvice(null);
     soundService.playMove();
   };
 
@@ -230,7 +273,7 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
           </div>
         ) : (
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={() => {
                   setHintUsed(true);
@@ -240,6 +283,19 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
               >
                 <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
                 <span>Hint</span>
+              </button>
+
+              <button
+                onClick={handleAskCoach}
+                disabled={isAskingCoach}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 rounded-xl text-xs font-medium border border-amber-500/40 transition-colors disabled:opacity-40"
+              >
+                {isAskingCoach ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span>Ask Coach</span>
               </button>
             </div>
 
@@ -257,6 +313,16 @@ export const PuzzlePlayer: React.FC<PuzzlePlayerProps> = ({
           <div className="p-2.5 bg-slate-900/90 border border-amber-500/30 rounded-xl text-xs text-slate-300 animate-in fade-in duration-150">
             <span className="font-semibold text-amber-400">Hint: </span>
             {puzzle.hint}
+          </div>
+        )}
+
+        {coachAdvice && (
+          <div className="p-3 bg-slate-900/90 border border-amber-500/40 rounded-xl text-xs text-slate-200 space-y-1 animate-in fade-in duration-150">
+            <div className="font-semibold text-amber-400 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Coach ({effectivePersonality})</span>
+            </div>
+            <p className="leading-relaxed">{coachAdvice}</p>
           </div>
         )}
       </div>

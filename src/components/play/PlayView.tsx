@@ -50,6 +50,7 @@ interface PlayViewProps {
   onOpenCoach: () => void;
   onPositionChange?: (fen: string, history: string[]) => void;
   onUpdateSettings?: (settings: AppSettings) => void;
+  isAnalyzingPlayerMoveExternalRef?: React.MutableRefObject<boolean>;
 }
 
 const TIME_CONTROLS: TimeControl[] = [
@@ -65,6 +66,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   onOpenCoach,
   onPositionChange,
   onUpdateSettings,
+  isAnalyzingPlayerMoveExternalRef,
 }) => {
   // Game Configuration
   const [mode, setMode] = useState<PlayMode>('ai');
@@ -80,6 +82,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
     coachError,
     isMuted: isCoachMuted,
     isAnalyzing: isCoachAnalyzing,
+    isAnalyzingPlayerMove,
+    isAnalyzingPlayerMoveRef,
     precomputeTurn,
     processMove: processCoachMove,
     toggleMute: toggleCoachMute,
@@ -91,6 +95,12 @@ export const PlayView: React.FC<PlayViewProps> = ({
     settings,
     playerColor,
   });
+
+  useEffect(() => {
+    if (isAnalyzingPlayerMoveExternalRef) {
+      isAnalyzingPlayerMoveExternalRef.current = isAnalyzingPlayerMove;
+    }
+  }, [isAnalyzingPlayerMove, isAnalyzingPlayerMoveExternalRef]);
 
   const handleToggleLiveCoach = () => {
     const nextEnabled = !settings.liveCoachEnabled;
@@ -392,11 +402,16 @@ export const PlayView: React.FC<PlayViewProps> = ({
         setLastMove({ from: move.from, to: move.to });
         setMoves((prev) => [...prev, moveRec]);
         calculateCapturedAndAdvantage(nextGame);
-        checkTermination(nextGame);
+        const ended = checkTermination(nextGame);
 
-        // Process live coach commentary for opponent move
+        // Process live coach commentary for opponent move ONLY if the computer's move
+        // results in Checkmate or Game Over (or if verbose mode and no player move analysis is active)
         const currentSanList = [...moves.map((m) => m.san), move.san];
-        processCoachMove(moveRec, prevFen, currentFen, false, currentSanList);
+        if (ended || nextGame.isCheckmate() || nextGame.isGameOver()) {
+          processCoachMove(moveRec, prevFen, currentFen, false, currentSanList);
+        } else if (settings.coachVerbosity === 'verbose' && !isAnalyzingPlayerMoveRef.current) {
+          processCoachMove(moveRec, prevFen, currentFen, false, currentSanList);
+        }
       }
     } catch (e) {
       console.warn('AI move calculation failed', e);
@@ -1053,6 +1068,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
               moves={moves}
               playerColor={playerColor}
               settings={settings}
+              coachPersonality={settings.coachPersonality}
+              coachVerbosity={settings.coachVerbosity}
               onClose={() => setShowPostGameReview(false)}
             />
           </div>

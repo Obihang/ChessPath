@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Chess } from 'chess.js';
 import { Lesson, LessonStep } from '../../types/curriculum';
-import { AppSettings } from '../../types/chess';
+import { AppSettings, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
 import { soundService } from '../../services/audioService';
 import { speechService } from '../../services/speechService';
+import { askCoach } from '../../services/coachService';
 import {
   ArrowLeft,
   Volume2,
@@ -13,11 +14,15 @@ import {
   ArrowRight,
   Eye,
   RotateCcw,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 
-interface LessonPlayerProps {
+export interface LessonPlayerProps {
   lesson: Lesson;
   settings: AppSettings;
+  coachPersonality?: CoachPersonality;
+  coachVerbosity?: CoachVerbosity;
   onBack: () => void;
   onComplete: (lessonId: string) => void;
 }
@@ -25,6 +30,8 @@ interface LessonPlayerProps {
 export const LessonPlayer: React.FC<LessonPlayerProps> = ({
   lesson,
   settings,
+  coachPersonality,
+  coachVerbosity,
   onBack,
   onComplete,
 }) => {
@@ -36,6 +43,13 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
   const [isSuccess, setIsSuccess] = useState(false);
   const [hintLevel, setHintLevel] = useState<0 | 1 | 2>(0); // 0=none, 1=hint, 2=solution
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [coachAdvice, setCoachAdvice] = useState<string | null>(null);
+  const [isAskingCoach, setIsAskingCoach] = useState(false);
+
+  const effectivePersonality: CoachPersonality =
+    coachPersonality || settings.coachPersonality || 'strict';
+  const effectiveVerbosity: CoachVerbosity =
+    coachVerbosity || settings.coachVerbosity || 'detailed';
 
   // Reset board on step change
   useEffect(() => {
@@ -44,7 +58,35 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
     setLastMove(null);
     setIsSuccess(false);
     setHintLevel(0);
+    setCoachAdvice(null);
   }, [step.fen]);
+
+  const handleAskCoach = async () => {
+    if (isAskingCoach) return;
+    speechService.unlock();
+    setIsAskingCoach(true);
+    try {
+      const response = await askCoach(
+        game.fen(),
+        `Lesson: ${lesson.title} (${lesson.subtitle}) — Step ${currentStepIdx + 1}: ${step.instruction}. Hint: ${step.hint}`,
+        step.expectedMoves,
+        undefined,
+        effectivePersonality,
+        effectiveVerbosity
+      );
+      setCoachAdvice(response);
+      if (settings.voiceEnabled) {
+        setIsSpeaking(true);
+        await speechService.speakWithCoach(response, settings, {
+          onStart: () => setIsSpeaking(true),
+          onEnd: () => setIsSpeaking(false),
+          onError: () => setIsSpeaking(false),
+        });
+      }
+    } finally {
+      setIsAskingCoach(false);
+    }
+  };
 
   const handleSpeak = async () => {
     speechService.unlock();
@@ -205,13 +247,26 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           </div>
         ) : (
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={() => setHintLevel((h) => (h === 0 ? 1 : 2))}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-medium border border-slate-800 transition-colors"
               >
                 <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
                 <span>{hintLevel === 0 ? 'Hint' : hintLevel === 1 ? 'Show Solution' : 'Hint'}</span>
+              </button>
+
+              <button
+                onClick={handleAskCoach}
+                disabled={isAskingCoach}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 rounded-xl text-xs font-medium border border-amber-500/40 transition-colors disabled:opacity-40"
+              >
+                {isAskingCoach ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span>Ask Coach</span>
               </button>
 
               {hintLevel >= 2 && (
@@ -243,6 +298,16 @@ export const LessonPlayer: React.FC<LessonPlayerProps> = ({
           <div className="p-2.5 bg-slate-900/80 border border-amber-500/30 rounded-xl text-xs text-slate-300 animate-in fade-in duration-150">
             <span className="font-semibold text-amber-400">Hint: </span>
             {step.hint}
+          </div>
+        )}
+
+        {coachAdvice && (
+          <div className="p-3 bg-slate-900/90 border border-amber-500/40 rounded-xl text-xs text-slate-200 space-y-1 animate-in fade-in duration-150">
+            <div className="font-semibold text-amber-400 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Coach ({effectivePersonality})</span>
+            </div>
+            <p className="leading-relaxed">{coachAdvice}</p>
           </div>
         )}
       </div>

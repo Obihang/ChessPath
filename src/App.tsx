@@ -163,6 +163,8 @@ export default function App() {
         {activeTab === 'learn' && (
           <LearnView
             settings={settings}
+            coachPersonality={settings.coachPersonality}
+            coachVerbosity={settings.coachVerbosity}
             completedLessonIds={progress.completedLessonIds}
             passedQuizLevelIds={progress.passedQuizLevelIds}
             onCompleteLesson={handleCompleteLesson}
@@ -180,6 +182,8 @@ export default function App() {
         {activeTab === 'practice' && (
           <PracticeView
             settings={settings}
+            coachPersonality={settings.coachPersonality}
+            coachVerbosity={settings.coachVerbosity}
             userRating={progress.puzzleRating}
             solvedPuzzleIds={[]}
             onSolvePuzzle={handleSolvePuzzle}

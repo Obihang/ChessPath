@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { PUZZLES } from '../../data/puzzlesData';
 import { PuzzleItem } from '../../types/curriculum';
-import { AppSettings } from '../../types/chess';
+import { AppSettings, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { PuzzlePlayer } from './PuzzlePlayer';
 import { PuzzleRush } from './PuzzleRush';
 import { EndgameDrillsView } from './EndgameDrillsView';
@@ -17,6 +17,8 @@ import {
 
 interface PracticeViewProps {
   settings: AppSettings;
+  coachPersonality?: CoachPersonality;
+  coachVerbosity?: CoachVerbosity;
   userRating: number;
   solvedPuzzleIds: string[];
   onSolvePuzzle: (puzzleId: string, ratingChange: number) => void;
@@ -25,6 +27,8 @@ interface PracticeViewProps {
 
 export const PracticeView: React.FC<PracticeViewProps> = ({
   settings,
+  coachPersonality,
+  coachVerbosity,
   userRating,
   solvedPuzzleIds,
   onSolvePuzzle,
@@ -73,6 +77,8 @@ export const PracticeView: React.FC<PracticeViewProps> = ({
       <PuzzlePlayer
         puzzle={selectedPuzzle}
         settings={settings}
+        coachPersonality={coachPersonality || settings.coachPersonality}
+        coachVerbosity={coachVerbosity || settings.coachVerbosity}
         userRating={userRating}
         onBack={() => {
           setSelectedPuzzle(null);

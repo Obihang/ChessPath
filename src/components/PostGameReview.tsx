@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Chess } from 'chess.js';
-import { AppSettings, MoveRecord, PieceColor } from '../types/chess';
+import { AppSettings, CoachPersonality, CoachVerbosity, MoveRecord, PieceColor } from '../types/chess';
 import { ChessBoard } from './board/ChessBoard';
 import { engineService } from '../services/engineService';
 import { generateGameSummary } from '../services/coachService';
@@ -28,6 +28,8 @@ export interface PostGameReviewProps {
   playerColor?: PieceColor;
   resultText?: string;
   settings: AppSettings;
+  coachPersonality?: CoachPersonality;
+  coachVerbosity?: CoachVerbosity;
   onClose: () => void;
 }
 
@@ -36,6 +38,8 @@ export const PostGameReview: React.FC<PostGameReviewProps> = ({
   playerColor = 'w',
   resultText = 'Game Completed',
   settings,
+  coachPersonality,
+  coachVerbosity,
   onClose,
 }) => {
   const [currentMoveIndex, setCurrentMoveIndex] = useState<number>(moves.length > 0 ? 0 : -1);
@@ -43,6 +47,10 @@ export const PostGameReview: React.FC<PostGameReviewProps> = ({
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
   const [aiSummary, setAiSummary] = useState<string>('');
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
+  const effectivePersonality: CoachPersonality =
+    coachPersonality || settings.coachPersonality || 'strict';
+  const effectiveVerbosity: CoachVerbosity =
+    coachVerbosity || settings.coachVerbosity || 'detailed';
 
   // Evaluate moves with Stockfish in the background if bestMoveUci is not yet populated
   useEffect(() => {
@@ -147,7 +155,15 @@ export const PostGameReview: React.FC<PostGameReviewProps> = ({
       const blunders = reviewedMoves.filter((m) => m.classification === 'blunder').length;
       const mistakes = reviewedMoves.filter((m) => m.classification === 'mistake').length;
       const inaccuracies = reviewedMoves.filter((m) => m.classification === 'inaccuracy').length;
-      const summary = await generateGameSummary(sanList, resultText, blunders, mistakes, inaccuracies);
+      const summary = await generateGameSummary(
+        sanList,
+        resultText,
+        blunders,
+        mistakes,
+        inaccuracies,
+        effectivePersonality,
+        effectiveVerbosity
+      );
       setAiSummary(summary);
       if (settings.voiceEnabled) {
         speak(summary, false, {

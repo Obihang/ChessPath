@@ -18,6 +18,41 @@ export interface DetectedProviderInfo {
   apiKey: string;
 }
 
+const PERSONA_PROMPTS: Record<CoachPersonality, string> = {
+  strict:
+    'You are a Strict Grandmaster: direct, sharp, and demanding of precision. Do not sugarcoat mistakes; point out the concrete flaw immediately and challenge the player to find stronger continuations.',
+  supportive:
+    'You are a Supportive Mentor: warm, encouraging, and constructive. Frame mistakes as learning opportunities and gently guide the student toward the stronger idea.',
+  aggressive:
+    'You are a Tactical Attacker: energetic and focused on initiative, king hunt, sacrifices, tempo, and punishing passive play.',
+  professor:
+    'You are a Positional Professor: analytical and focused on pawn structure, outposts, piece coordination, king safety, and long-term strategic plans.',
+};
+
+/**
+ * Resolves the user's saved coachPersonality from localStorage, defaulting to 'strict'.
+ */
+export function getResolvedCoachPersonality(explicitPersonality?: CoachPersonality): CoachPersonality {
+  if (explicitPersonality) return explicitPersonality;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const progressRaw = localStorage.getItem(PROGRESS_KEY);
+      if (progressRaw) {
+        const parsed = JSON.parse(progressRaw);
+        if (parsed?.coachPersonality) return parsed.coachPersonality;
+      }
+      const settingsRaw = localStorage.getItem(SETTINGS_KEY);
+      if (settingsRaw) {
+        const parsed = JSON.parse(settingsRaw);
+        if (parsed?.coachPersonality) return parsed.coachPersonality;
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+  return 'strict';
+}
+
 /**
  * Resolves the user's saved AI API key from localStorage (`chesspath_progress_v1` or `chesspath_settings_v1`),
  * falling back to `process.env.GEMINI_API_KEY`.
@@ -242,8 +277,11 @@ export async function askCoach(
   fen: string,
   question: string,
   moveHistory: string[] = [],
-  evaluation?: number
+  evaluation?: number,
+  personality?: CoachPersonality,
+  verbosity?: CoachVerbosity
 ): Promise<string> {
+  const activePersonality = getResolvedCoachPersonality(personality);
   const detected = detectApiKeyProvider();
   if (detected.provider === 'none') {
     return 'AI Coach is currently offline (no AI API key configured). Add your Gemini, Groq, OpenAI, Anthropic, or OpenRouter key in the Coach Settings modal, or use the local Stockfish evaluation bar and hints!';
@@ -254,8 +292,15 @@ export async function askCoach(
       ? `Current Stockfish Evaluation: ${evaluation > 0 ? `+${evaluation.toFixed(1)}` : evaluation.toFixed(1)} (positive favors White).`
       : '';
 
-  const systemInstruction =
-    'You are a world-class chess coach teaching a student on ChessPath. Keep your response concise (2-4 sentences max), clear, and actionable. Reference concrete squares and pieces without markdown clutter.';
+  const lengthRule =
+    verbosity === 'brief'
+      ? 'Keep your response to 1-2 short sentences.'
+      : verbosity === 'verbose'
+      ? 'Provide a thorough 3-4 sentence tactical and positional explanation.'
+      : 'Keep your response concise (2-3 sentences max), clear, and actionable.';
+
+  const systemInstruction = `${PERSONA_PROMPTS[activePersonality]}
+${lengthRule} Reference concrete squares and pieces in plain spoken text without markdown formatting.`;
 
   const prompt = `Current Position (FEN): ${fen}
 Recent Moves: ${moveHistory.slice(-10).join(', ') || 'Opening position'}
@@ -264,9 +309,9 @@ ${evalContext}
 Student's Question: "${question}"
 
 Instructions:
-- Keep your response concise (2-4 sentences max), clear, and encouraging.
-- Explain the strategic or tactical "why" behind ideas (e.g. king safety, center control, pins, forks, weak squares).
-- Reference concrete squares and pieces when helpful.`;
+- Stay strictly in your ${activePersonality} coach persona.
+- ${lengthRule}
+- Explain the strategic or tactical "why" behind ideas (e.g. king safety, center control, pins, forks, weak squares).`;
 
   try {
     const reply = await callSmartAI(prompt, systemInstruction);
@@ -282,24 +327,36 @@ export async function generateGameSummary(
   result: string,
   blunders: number,
   mistakes: number,
-  inaccuracies: number
+  inaccuracies: number,
+  personality?: CoachPersonality,
+  _verbosity?: CoachVerbosity
 ): Promise<string> {
+  const activePersonality = getResolvedCoachPersonality(personality);
   const detected = detectApiKeyProvider();
   if (detected.provider === 'none') {
+    if (activePersonality === 'strict') {
+      return `Game Over (${result}). You committed ${blunders} blunders, ${mistakes} mistakes, and ${inaccuracies} inaccuracies. Eliminate those tactical oversights by reviewing each critical turn in the move list.`;
+    }
+    if (activePersonality === 'aggressive') {
+      return `Game Over (${result})! You had ${blunders} blunders, ${mistakes} mistakes, and ${inaccuracies} inaccuracies. Look for missed attacking chances and forcing checks in the move list!`;
+    }
+    if (activePersonality === 'professor') {
+      return `Game Over (${result}). Structural review shows ${blunders} blunders, ${mistakes} mistakes, and ${inaccuracies} inaccuracies. Examine the move list to see where piece coordination shifted.`;
+    }
     return `Game Over (${result}). You made ${blunders} blunders, ${mistakes} mistakes, and ${inaccuracies} inaccuracies. Review your critical turns using the move list!`;
   }
 
-  const systemInstruction =
-    'You are an insightful chess coach reviewing a completed game. Write a brief, encouraging 3-sentence post-game summary in plain text.';
+  const systemInstruction = `${PERSONA_PROMPTS[activePersonality]}
+Write a brief, 3-sentence post-game review in plain text (no markdown).`;
 
   const prompt = `Result: ${result}
 Moves played: ${moveHistory.join(' ')}
 Stats: ${blunders} blunders, ${mistakes} mistakes, ${inaccuracies} inaccuracies.
 
-Write a brief, encouraging 3-sentence post-game summary:
-1. Acknowledge the result and overall accuracy.
+Write a 3-sentence post-game summary in your ${activePersonality} persona:
+1. Evaluate the result and overall accuracy (${blunders} blunders, ${mistakes} mistakes, ${inaccuracies} inaccuracies).
 2. Point out one opening or middlegame takeaway based on the moves played.
-3. Give one actionable tip for the next game.`;
+3. Give one concrete, actionable directive for the next game.`;
 
   try {
     const reply = await callSmartAI(prompt, systemInstruction);
@@ -340,16 +397,7 @@ export async function analyzeMoveWithAI({
   verbosity = 'detailed',
   personality = 'strict',
 }: AnalyzeMoveWithAIInput): Promise<string> {
-  const personaDescriptions: Record<CoachPersonality, string> = {
-    strict:
-      'You are a Strict Grandmaster: direct, sharp, and demanding of precision. Do not sugarcoat mistakes; point out the concrete flaw immediately and challenge the player to find stronger continuations.',
-    supportive:
-      'You are a Supportive Mentor: warm, encouraging, and constructive. Frame mistakes as learning opportunities and gently guide the student toward the stronger idea.',
-    aggressive:
-      'You are a Tactical Attacker: energetic and focused on initiative, king hunt, sacrifices, tempo, and punishing passive play.',
-    professor:
-      'You are a Positional Professor: analytical and focused on pawn structure, outposts, piece coordination, king safety, and long-term strategic plans.',
-  };
+  const activePersonality = getResolvedCoachPersonality(personality);
 
   const verbosityDescriptions: Record<CoachVerbosity, string> = {
     silent: 'Output nothing.',
@@ -368,7 +416,7 @@ export async function analyzeMoveWithAI({
       ? `Explicitly name the best move (${bestMoveSan || 'the engine recommendation'}) and explain the concrete continuation.`
       : `Do NOT spoil the exact move notation "${bestMoveSan || ''}" directly; instead, describe the tactical motif or strategic plan the player should look for.`;
 
-  const systemInstruction = `${personaDescriptions[personality]}
+  const systemInstruction = `${PERSONA_PROMPTS[activePersonality]}
 ${verbosityDescriptions[verbosity]}
 Rules:
 - Output PLAIN SPOKEN TEXT ONLY (no markdown, no asterisks, no bullet points).

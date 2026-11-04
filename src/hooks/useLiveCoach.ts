@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { Chess } from 'chess.js';
 import { AppSettings, CoachPersonality, CoachVerbosity, MoveRecord, PieceColor } from '../types/chess';
 import {
   coachCommentaryService,
@@ -34,8 +35,11 @@ export interface UseLiveCoachOptions {
 export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: UseLiveCoachOptions) {
   const [currentRecord, setCurrentRecord] = useState<MoveAnalysisRecord | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isAnalyzingPlayerMove, setIsAnalyzingPlayerMove] = useState<boolean>(false);
 
   const requestIdRef = useRef<number>(0);
+  const isAnalyzingPlayerMoveRef = useRef<boolean>(false);
+  const isSpeakingPlayerMoveRef = useRef<boolean>(false);
   const lastPhaseRef = useRef<'opening' | 'middlegame' | 'endgame'>('opening');
 
   const verbosity: CoachVerbosity =
@@ -56,8 +60,8 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   /**
    * Process a live move executed during gameplay.
-   * Uses local heuristic commentary (`generateCommentary`) and upgrades with `analyzeMoveWithAI`
-   * (with a 3.5s timeout fallback) when a universal AI key is configured.
+   * Ensures computer reply moves NEVER interrupt or overwrite the player's move analysis/speech
+   * unless the computer's move results in Checkmate or Game Over.
    */
   const processMove = useCallback(
     async (
@@ -75,11 +79,52 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         return;
       }
 
+      // Check if computer move resulted in Checkmate or Game Over
+      let isComputerGameOverMove = false;
+      if (!isPlayerMove) {
+        try {
+          const afterGame = new Chess(currentFen);
+          isComputerGameOverMove = afterGame.isCheckmate() || afterGame.isGameOver();
+        } catch {
+          isComputerGameOverMove = move.san.includes('#');
+        }
+
+        // For routine computer moves:
+        // Never overwrite commentary or call stopSpeech()/speak() if the Coach is analyzing/speaking
+        // or just analyzed the player's move!
+        if (!isComputerGameOverMove) {
+          if (
+            verbosity === 'verbose' &&
+            !isAnalyzingPlayerMoveRef.current &&
+            !isSpeakingPlayerMoveRef.current &&
+            !speechService.isSpeaking()
+          ) {
+            // Append brief computer reply note without calling stopSpeech() on the player's move critique
+            setCurrentRecord((prev) => {
+              if (!prev || !prev.comment) return prev;
+              const replyNote = ` (Computer replied ${move.san}.)`;
+              if (prev.comment.includes(replyNote)) return prev;
+              return {
+                ...prev,
+                comment: `${prev.comment}${replyNote}`,
+              };
+            });
+          }
+          return;
+        }
+      }
+
       const moveStartTime = Date.now();
       const currentRequestId = ++requestIdRef.current;
 
-      // Stop previous speech smoothly when a new move occurs
-      speechService.stop('New move executed');
+      if (isPlayerMove) {
+        isAnalyzingPlayerMoveRef.current = true;
+        setIsAnalyzingPlayerMove(true);
+      }
+
+      // Stop previous speech smoothly only when a new PLAYER move occurs or computer delivers checkmate/game over
+      speechService.stop(isPlayerMove ? 'New player move executed' : 'Game over move executed');
+      isSpeakingPlayerMoveRef.current = false;
 
       const initialRecord: MoveAnalysisRecord = {
         requestId: currentRequestId,
@@ -114,7 +159,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         }
 
         // 2. Compute local heuristic commentary with personality and verbosity
-        // Convert mover-perspective evalBefore/evalAfter back to White-perspective centipawns for generateCommentary
         const whiteEvalBefore =
           facts.evalBefore !== null
             ? facts.moverColor === 'w'
@@ -144,7 +188,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
             ? facts.classification
             : localCommentary.classification;
 
-        // Check if this move warrants commentary based on verbosity & player/opponent turn
         const isCriticalOrTactical =
           effectiveClassification === 'inaccuracy' ||
           effectiveClassification === 'mistake' ||
@@ -155,31 +198,18 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           move.san.includes('+') ||
           move.san.includes('#');
 
-        if (isPlayerMove) {
-          if (verbosity === 'brief' && !isCriticalOrTactical) {
-            setCurrentRecord((prev) => {
-              if (!prev || prev.requestId !== currentRequestId) return prev;
-              return {
-                ...prev,
-                facts,
-                status: 'complete',
-              };
-            });
-            return;
-          }
-        } else {
-          // Opponent moves only comment on major swings/checks/blunders
-          if (!coachCommentaryService.shouldModeComment(settings.coachMode, facts, false)) {
-            setCurrentRecord((prev) => {
-              if (!prev || prev.requestId !== currentRequestId) return prev;
-              return {
-                ...prev,
-                facts,
-                status: 'complete',
-              };
-            });
-            return;
-          }
+        if (isPlayerMove && verbosity === 'brief' && !isCriticalOrTactical) {
+          isAnalyzingPlayerMoveRef.current = false;
+          setIsAnalyzingPlayerMove(false);
+          setCurrentRecord((prev) => {
+            if (!prev || prev.requestId !== currentRequestId) return prev;
+            return {
+              ...prev,
+              facts,
+              status: 'complete',
+            };
+          });
+          return;
         }
 
         setCurrentRecord((prev) => {
@@ -193,7 +223,11 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
         // 3. Determine final commentary text (Smart AI with 3.5s timeout fallback to local heuristic)
         const textGenStart = Date.now();
-        let finalComment = localCommentary.text;
+        let finalComment = isComputerGameOverMove
+          ? move.san.includes('#')
+            ? `Checkmate with ${move.san}! Review the critical turning points to see how the attack developed.`
+            : `Game over after ${move.san}.`
+          : localCommentary.text;
         let usedSource: 'gemini' | 'template' = 'template';
 
         const detectedProvider = detectApiKeyProvider(settings.aiApiKey || settings.geminiApiKey);
@@ -226,12 +260,16 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
               usedSource = 'gemini';
             }
           } catch {
-            // Seamlessly fall back to localCommentary.text
             finalComment = localCommentary.text;
           }
         }
 
         const textGenMs = Date.now() - textGenStart;
+
+        if (isPlayerMove && currentRequestId === requestIdRef.current) {
+          isAnalyzingPlayerMoveRef.current = false;
+          setIsAnalyzingPlayerMove(false);
+        }
 
         if (currentRequestId !== requestIdRef.current) {
           return;
@@ -263,11 +301,27 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           // 4. Speak result via Edge Neural TTS / Browser TTS
           let firstAudioMs = 0;
           if (settings.voiceEnabled && !isMuted) {
+            if (isPlayerMove) {
+              isSpeakingPlayerMoveRef.current = true;
+            }
             const speechRes = await speechService.speakWithCoach(finalComment, settings, {
               onFirstAudio: (timeToFirst) => {
                 firstAudioMs = timeToFirst;
               },
+              onEnd: () => {
+                if (currentRequestId === requestIdRef.current) {
+                  isSpeakingPlayerMoveRef.current = false;
+                }
+              },
+              onError: () => {
+                if (currentRequestId === requestIdRef.current) {
+                  isSpeakingPlayerMoveRef.current = false;
+                }
+              },
             });
+            if (currentRequestId === requestIdRef.current) {
+              isSpeakingPlayerMoveRef.current = false;
+            }
             if (speechRes.timeToFirstAudioMs) {
               firstAudioMs = speechRes.timeToFirstAudioMs;
             }
@@ -291,6 +345,10 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           });
         }
       } catch (err: any) {
+        if (isPlayerMove && currentRequestId === requestIdRef.current) {
+          isAnalyzingPlayerMoveRef.current = false;
+          setIsAnalyzingPlayerMove(false);
+        }
         console.warn('useLiveCoach processMove error:', err);
         speechService.logDiagnostic('error', `Live coach move processing error: ${err?.message || err}`);
 
@@ -306,13 +364,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         }
       }
     },
-    [
-      settings,
-      verbosity,
-      personality,
-      isMuted,
-      onCommentaryGenerated,
-    ]
+    [settings, verbosity, personality, isMuted, onCommentaryGenerated]
   );
 
   const toggleMute = useCallback(() => {
@@ -320,6 +372,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       const next = !prev;
       if (next) {
         speechService.stop('Live coach muted');
+        isSpeakingPlayerMoveRef.current = false;
       }
       return next;
     });
@@ -327,6 +380,9 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   const dismissComment = useCallback(() => {
     requestIdRef.current++;
+    isAnalyzingPlayerMoveRef.current = false;
+    isSpeakingPlayerMoveRef.current = false;
+    setIsAnalyzingPlayerMove(false);
     setCurrentRecord(null);
   }, []);
 
@@ -338,6 +394,9 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   const resetCoach = useCallback(() => {
     requestIdRef.current++;
+    isAnalyzingPlayerMoveRef.current = false;
+    isSpeakingPlayerMoveRef.current = false;
+    setIsAnalyzingPlayerMove(false);
     setCurrentRecord(null);
     speechService.stop('Coach reset');
     lastPhaseRef.current = 'opening';
@@ -377,6 +436,8 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     coachError,
     isMuted,
     isAnalyzing,
+    isAnalyzingPlayerMove,
+    isAnalyzingPlayerMoveRef,
     precomputeTurn,
     processMove,
     toggleMute,
