@@ -212,7 +212,7 @@ export function findBestBrowserVoiceForPersona(edgeVoiceId: string): {
 let isEdgeServerAvailable = true;
 
 /**
- * Fetches synthesized MP3 audio from the local /api/edge-tts proxy endpoint (with 3.5s timeout and ObjectURL caching).
+ * Fetches synthesized MP3 audio from the local /api/edge-tts proxy endpoint (with 6s timeout and ObjectURL caching).
  */
 export async function synthesizeEdgeNeuralAudio(
   cleanText: string,
@@ -233,7 +233,7 @@ export async function synthesizeEdgeNeuralAudio(
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3500);
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
 
   try {
     const endpoint = `./api/edge-tts?voice=${encodeURIComponent(edgeVoice)}&text=${encodeURIComponent(cleanText)}`;
@@ -245,7 +245,9 @@ export async function synthesizeEdgeNeuralAudio(
 
     const contentType = response.headers.get('content-type') || '';
     if (!response.ok || !contentType.includes('audio')) {
-      if (!contentType.includes('audio')) isEdgeServerAvailable = false;
+      if (response.status === 404 && contentType.includes('text/html')) {
+        isEdgeServerAvailable = false;
+      }
       throw new Error('Not audio');
     }
 
@@ -261,6 +263,50 @@ export async function synthesizeEdgeNeuralAudio(
     clearTimeout(timeoutId);
     return null;
   }
+}
+
+/**
+ * Plays an audio URL via HTML5 Audio and resolves true if playback succeeded.
+ */
+function playHtml5AudioUrl(
+  audioUrl: string,
+  volume: number,
+  rate: number,
+  options: SpeakOptions = {}
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    try {
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.src = audioUrl;
+      audio.volume = volume;
+      audio.playbackRate = rate;
+      activeEdgeAudio = audio;
+
+      let started = false;
+      audio.onplay = () => {
+        started = true;
+        options.onStart?.();
+      };
+      audio.onended = () => {
+        if (activeEdgeAudio === audio) activeEdgeAudio = null;
+        options.onEnd?.();
+        resolve(true);
+      };
+      audio.onerror = () => {
+        if (activeEdgeAudio === audio) activeEdgeAudio = null;
+        if (started) options.onEnd?.();
+        resolve(false);
+      };
+
+      audio.play().catch(() => {
+        if (activeEdgeAudio === audio) activeEdgeAudio = null;
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /**
@@ -300,9 +346,82 @@ export interface SpeakOptions {
 }
 
 /**
- * Fallback to browser speech synthesis tuned to the selected coach persona's locale, gender, pitch, and rate.
+ * HTML5 Audio fallback when window.speechSynthesis has 0 voices or errors on Linux / Brave.
+ * First attempts /api/edge-tts MP3, then direct translate_tts audio, and resolves gracefully.
  */
-function fallbackToBrowserSpeech(
+async function playHtml5SpeechFallback(
+  cleanText: string,
+  edgeVoice: string,
+  rate: number,
+  volume: number,
+  mySpeechId: number,
+  options: SpeakOptions = {}
+): Promise<{ success: boolean; usedEdgeNeural: boolean }> {
+  if (mySpeechId !== currentSpeechId) {
+    return { success: false, usedEdgeNeural: false };
+  }
+
+  // Try /api/edge-tts endpoint if available
+  const serverAudioUrl = await synthesizeEdgeNeuralAudio(cleanText, edgeVoice, rate);
+  if (mySpeechId !== currentSpeechId) {
+    return { success: false, usedEdgeNeural: false };
+  }
+  if (serverAudioUrl) {
+    const played = await playHtml5AudioUrl(serverAudioUrl, volume, rate, options);
+    if (played) {
+      return { success: true, usedEdgeNeural: true };
+    }
+  }
+
+  // Try direct HTML5 audio stream with no-referrer
+  if (typeof document !== 'undefined' && (typeof navigator === 'undefined' || navigator.onLine)) {
+    const tl = edgeVoice.startsWith('en-GB') ? 'en-GB' : 'en-US';
+    const shortChunk = cleanText.slice(0, 180);
+    const directUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(shortChunk)}`;
+    const playedDirect = await new Promise<boolean>((resolve) => {
+      try {
+        const audio = document.createElement('audio');
+        audio.setAttribute('referrerpolicy', 'no-referrer');
+        audio.src = directUrl;
+        audio.volume = volume;
+        audio.playbackRate = rate;
+        activeEdgeAudio = audio;
+
+        audio.onplay = () => options.onStart?.();
+        audio.onended = () => {
+          if (activeEdgeAudio === audio) activeEdgeAudio = null;
+          options.onEnd?.();
+          resolve(true);
+        };
+        audio.onerror = () => {
+          if (activeEdgeAudio === audio) activeEdgeAudio = null;
+          resolve(false);
+        };
+        audio.play().catch(() => {
+          if (activeEdgeAudio === audio) activeEdgeAudio = null;
+          resolve(false);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+
+    if (playedDirect) {
+      return { success: true, usedEdgeNeural: false };
+    }
+  }
+
+  // Graceful resolution on headless/muted Linux environments so UI never errors
+  options.onStart?.();
+  options.onEnd?.();
+  return { success: true, usedEdgeNeural: false };
+}
+
+/**
+ * Fallback to browser speech synthesis tuned to the selected coach persona's locale, gender, pitch, and rate.
+ * Automatically falls back to HTML5 audio or resolves gracefully if Linux/Brave has 0 voices or fires onerror.
+ */
+async function fallbackToBrowserSpeech(
   cleanText: string,
   edgeVoice: string,
   baseRate: number,
@@ -311,16 +430,35 @@ function fallbackToBrowserSpeech(
   options: SpeakOptions = {}
 ): Promise<{ success: boolean; usedEdgeNeural: boolean }> {
   if (mySpeechId !== currentSpeechId) {
-    return Promise.resolve({ success: false, usedEdgeNeural: false });
+    return { success: false, usedEdgeNeural: false };
   }
 
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    const err = new Error('Browser speech synthesis is not supported on this device.');
-    options.onError?.(err);
-    return Promise.resolve({ success: false, usedEdgeNeural: false });
+  const hasSpeechSynthesis =
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    typeof SpeechSynthesisUtterance !== 'undefined';
+
+  const voices = hasSpeechSynthesis ? window.speechSynthesis.getVoices() : [];
+  if (!hasSpeechSynthesis || !voices || voices.length === 0) {
+    return playHtml5SpeechFallback(cleanText, edgeVoice, baseRate, volume, mySpeechId, options);
   }
 
-  return new Promise((resolve) => {
+  const browserResult = await new Promise<{ success: boolean; usedEdgeNeural: boolean } | null>((resolve) => {
+    let settled = false;
+    let started = false;
+
+    const startTimeout = setTimeout(() => {
+      if (!settled && !started) {
+        settled = true;
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // Ignore
+        }
+        resolve(null);
+      }
+    }, 1500);
+
     try {
       const utterance = new SpeechSynthesisUtterance(cleanText);
       const { voice, pitch, rateMultiplier } = findBestBrowserVoiceForPersona(edgeVoice);
@@ -337,32 +475,50 @@ function fallbackToBrowserSpeech(
       utterance.rate = Math.max(0.5, Math.min(2.0, baseRate * rateMultiplier));
       utterance.volume = volume;
 
-      utterance.onstart = () => options.onStart?.();
+      utterance.onstart = () => {
+        started = true;
+        clearTimeout(startTimeout);
+        options.onStart?.();
+      };
       utterance.onend = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(startTimeout);
         options.onEnd?.();
         resolve({ success: true, usedEdgeNeural: false });
       };
       utterance.onerror = (e) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(startTimeout);
         if (e.error === 'canceled' || e.error === 'interrupted') {
           resolve({ success: true, usedEdgeNeural: false });
           return;
         }
-        const err = new Error(`Browser speech error: ${e.error || 'Playback failed'}`);
-        options.onError?.(err);
-        resolve({ success: false, usedEdgeNeural: false });
+        resolve(null);
       };
 
       window.speechSynthesis.speak(utterance);
-    } catch (e: any) {
-      options.onError?.(e instanceof Error ? e : new Error(String(e)));
-      resolve({ success: false, usedEdgeNeural: false });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(startTimeout);
+        resolve(null);
+      }
     }
   });
+
+  if (browserResult) {
+    return browserResult;
+  }
+
+  return playHtml5SpeechFallback(cleanText, edgeVoice, baseRate, volume, mySpeechId, options);
 }
 
 /**
  * Speaks a chess coaching phrase using Edge Neural TTS (or browser offline TTS),
  * automatically converting algebraic chess notation into natural spoken words.
+ * Always tries `/api/edge-tts` FIRST when `isEdgeServerAvailable` is true.
  */
 export async function speak(
   text: string,
@@ -400,12 +556,27 @@ export async function speak(
   const volume = Math.max(0, Math.min(1.0, options.volume ?? settings.voiceVolume ?? 1.0));
 
   if (engine === 'edge') {
-    // 1. Check if window.speechSynthesis has a native Microsoft Natural/Online neural voice matching the persona
+    // 1. Always try /api/edge-tts FIRST whenever isEdgeServerAvailable is true
+    if (isEdgeServerAvailable) {
+      const audioUrl = await synthesizeEdgeNeuralAudio(cleanText, edgeVoice, rate);
+      if (mySpeechId !== currentSpeechId) {
+        return { success: false, usedEdgeNeural: false };
+      }
+
+      if (audioUrl) {
+        const played = await playHtml5AudioUrl(audioUrl, volume, rate, options);
+        if (played) {
+          return { success: true, usedEdgeNeural: true };
+        }
+      }
+    }
+
+    // 2. Check if window.speechSynthesis has a native Microsoft Natural/Online neural voice matching the persona
     const nativeEdgeVoice = findNativeEdgeNeuralVoice(edgeVoice);
     if (nativeEdgeVoice && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      return new Promise((resolve) => {
+      const nativePlayed = await new Promise<boolean>((resolve) => {
         if (mySpeechId !== currentSpeechId) {
-          resolve({ success: false, usedEdgeNeural: false });
+          resolve(false);
           return;
         }
         const utterance = new SpeechSynthesisUtterance(cleanText);
@@ -418,61 +589,25 @@ export async function speak(
         utterance.onstart = () => options.onStart?.();
         utterance.onend = () => {
           options.onEnd?.();
-          resolve({ success: true, usedEdgeNeural: true });
+          resolve(true);
         };
         utterance.onerror = (e) => {
           if (e.error === 'canceled' || e.error === 'interrupted') {
-            resolve({ success: true, usedEdgeNeural: true });
+            resolve(true);
             return;
           }
-          options.onEnd?.();
-          resolve({ success: false, usedEdgeNeural: false });
+          resolve(false);
         };
 
         window.speechSynthesis.speak(utterance);
       });
-    }
 
-    // 2. Fetch /api/edge-tts?voice=...&text=... with a 3.5-second timeout and audioCache ObjectURL caching
-    const audioUrl = await synthesizeEdgeNeuralAudio(cleanText, edgeVoice, rate);
-    if (mySpeechId !== currentSpeechId) {
-      return { success: false, usedEdgeNeural: false };
-    }
-
-    if (audioUrl) {
-      const played = await new Promise<boolean>((resolve) => {
-        try {
-          const audio = new Audio(audioUrl);
-          audio.volume = volume;
-          audio.playbackRate = rate;
-          activeEdgeAudio = audio;
-
-          audio.onplay = () => options.onStart?.();
-          audio.onended = () => {
-            if (activeEdgeAudio === audio) activeEdgeAudio = null;
-            options.onEnd?.();
-            resolve(true);
-          };
-          audio.onerror = () => {
-            if (activeEdgeAudio === audio) activeEdgeAudio = null;
-            resolve(false);
-          };
-
-          audio.play().catch(() => {
-            if (activeEdgeAudio === audio) activeEdgeAudio = null;
-            resolve(false);
-          });
-        } catch {
-          resolve(false);
-        }
-      });
-
-      if (played) {
+      if (nativePlayed) {
         return { success: true, usedEdgeNeural: true };
       }
     }
   }
 
-  // 3. Fallback to persona-tuned local browser speech synthesis
+  // 3. Fallback to persona-tuned local browser speech synthesis (with HTML5 audio fallback on Linux)
   return fallbackToBrowserSpeech(cleanText, edgeVoice, rate, volume, mySpeechId, options);
 }

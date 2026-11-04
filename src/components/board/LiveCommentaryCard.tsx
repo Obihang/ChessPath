@@ -1,6 +1,6 @@
 import React from 'react';
 import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw, Navigation, Loader2 } from 'lucide-react';
-import { CoachMode } from '../../types/chess';
+import { CoachMode, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { MoveFacts } from '../../services/coachCommentaryService';
 
 export interface LiveCommentaryCardProps {
@@ -8,6 +8,10 @@ export interface LiveCommentaryCardProps {
   isMuted: boolean;
   onToggleMute: () => void;
   mode?: CoachMode;
+  coachVerbosity?: CoachVerbosity;
+  coachPersonality?: CoachPersonality;
+  onVerbosityChange?: (verbosity: CoachVerbosity) => void;
+  onPersonalityChange?: (personality: CoachPersonality) => void;
   facts?: MoveFacts | null;
   isAnalyzing?: boolean;
   onOpenCoach?: () => void;
@@ -23,6 +27,10 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   isMuted,
   onToggleMute,
   mode = 'learning',
+  coachVerbosity = 'detailed',
+  coachPersonality = 'strict',
+  onVerbosityChange,
+  onPersonalityChange,
   facts,
   isAnalyzing = false,
   onOpenCoach,
@@ -71,35 +79,109 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
     onShowBetterMove;
 
   return (
-    <div className="w-full max-w-[520px] bg-slate-900/95 border border-slate-700/70 rounded-xl p-3 shadow-xl flex items-start gap-3 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
-      {/* Coach Bot Icon */}
-      <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0 mt-0.5">
-        {isAnalyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-      </div>
-
-      {/* Main Comment Text & Badge */}
-      <div className="flex-1 min-w-0 space-y-1.5">
+    <div className="w-full max-w-[520px] bg-slate-900/95 border border-slate-700/70 rounded-xl p-3 shadow-xl flex flex-col gap-2 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-300">
+      {/* Top Header Bar with Badge, Quick Mode & Persona Dropdowns, and Actions */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
+          <div className="w-6 h-6 rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
+            {isAnalyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />}
+          </div>
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${badgeColor}`}>
             {badgeLabel}
           </span>
           {facts?.moveSan && (
             <span className="text-[11px] text-slate-300 font-mono font-medium">
-              on move <strong className="text-amber-400">{facts.moveSan}</strong>
+              on <strong className="text-amber-400">{facts.moveSan}</strong>
             </span>
           )}
           {facts && facts.evalAfter !== null && (
-            <span className="text-[10px] text-slate-400 font-mono ml-auto">
-              Eval: {facts.evalAfter >= 0 ? `+${(facts.evalAfter / 100).toFixed(1)}` : (facts.evalAfter / 100).toFixed(1)}
+            <span className="text-[10px] text-slate-400 font-mono">
+              ({facts.evalAfter >= 0 ? `+${(facts.evalAfter / 100).toFixed(1)}` : (facts.evalAfter / 100).toFixed(1)})
             </span>
           )}
           {facts && facts.evalAfter === null && facts.mateAfter !== null && facts.mateAfter !== undefined && (
-            <span className="text-[10px] text-purple-400 font-mono ml-auto">
-              {facts.mateAfter > 0 ? `+M${facts.mateAfter}` : `-M${Math.abs(facts.mateAfter)}`}
+            <span className="text-[10px] text-purple-400 font-mono">
+              ({facts.mateAfter > 0 ? `+M${facts.mateAfter}` : `-M${Math.abs(facts.mateAfter)}`})
             </span>
           )}
         </div>
 
+        {/* Quick Mode & Persona Dropdowns + Action Buttons */}
+        <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+          {onVerbosityChange && (
+            <select
+              value={coachVerbosity}
+              onChange={(e) => onVerbosityChange(e.target.value as CoachVerbosity)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[10px] font-medium rounded-md px-1.5 py-0.5 focus:outline-hidden focus:border-amber-500"
+              title="Coaching Mode"
+            >
+              <option value="silent">Silent</option>
+              <option value="brief">Brief</option>
+              <option value="detailed">Detailed</option>
+              <option value="verbose">Verbose</option>
+            </select>
+          )}
+
+          {onPersonalityChange && (
+            <select
+              value={coachPersonality}
+              onChange={(e) => onPersonalityChange(e.target.value as CoachPersonality)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[10px] font-medium rounded-md px-1.5 py-0.5 focus:outline-hidden focus:border-amber-500"
+              title="Coach Persona"
+            >
+              <option value="strict">Strict GM</option>
+              <option value="supportive">Supportive</option>
+              <option value="aggressive">Aggressive</option>
+              <option value="professor">Professor</option>
+            </select>
+          )}
+
+          {onRepeat && (
+            <button
+              type="button"
+              onClick={onRepeat}
+              className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+              title="Repeat speech"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onToggleMute}
+            className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            title={isMuted ? 'Unmute live commentary' : 'Mute live commentary'}
+          >
+            {isMuted ? <VolumeX className="w-3.5 h-3.5 text-slate-500" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
+          </button>
+
+          {onOpenCoach && (
+            <button
+              type="button"
+              onClick={onOpenCoach}
+              className="p-1 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
+              title="Chat with AI Coach"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="p-1 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Comment Body */}
+      <div className="space-y-1.5">
         {displayText && (
           <p className="text-xs text-slate-200 leading-relaxed font-medium">
             {displayText}
@@ -123,7 +205,7 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
 
         {/* Show Better Move Button */}
         {showBetterMoveBtn && (
-          <div className="pt-1">
+          <div className="pt-0.5">
             <button
               type="button"
               onClick={() => {
@@ -137,51 +219,6 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
               <span>Show better move ({facts.bestMoveSan}) on board</span>
             </button>
           </div>
-        )}
-      </div>
-
-      {/* Action Buttons */}
-      <div className="flex items-center gap-1 shrink-0">
-        {onRepeat && (
-          <button
-            type="button"
-            onClick={onRepeat}
-            className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-            title="Repeat speech"
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={onToggleMute}
-          className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
-          title={isMuted ? 'Unmute live commentary' : 'Mute live commentary'}
-        >
-          {isMuted ? <VolumeX className="w-3.5 h-3.5 text-slate-500" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
-        </button>
-
-        {onOpenCoach && (
-          <button
-            type="button"
-            onClick={onOpenCoach}
-            className="p-1.5 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
-            title="Chat with AI Coach"
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-          </button>
-        )}
-
-        {onDismiss && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition-colors ml-0.5"
-            title="Dismiss"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
         )}
       </div>
     </div>

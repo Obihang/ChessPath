@@ -195,15 +195,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleApiKeyChange = (newKey: string) => {
     const trimmed = newKey.trim();
-    const detected = detectApiKeyProvider(trimmed);
     const updated: AppSettings = {
       ...localSettings,
       aiApiKey: trimmed,
       geminiApiKey: trimmed,
-      aiProvider:
-        detected.provider === 'none'
-          ? 'gemini'
-          : (detected.provider as AppSettings['aiProvider']),
     };
     setLocalSettings(updated);
     storageService.saveSettings(updated);
@@ -285,7 +280,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const activeTtsEngine: TTSEngineType =
     localSettings.ttsEngine || (localSettings.useNaturalVoice === false ? 'browser' : 'edge');
   const activeApiKey = localSettings.aiApiKey || localSettings.geminiApiKey || '';
-  const detectedProvider = detectApiKeyProvider(activeApiKey);
+  const activeProvider = localSettings.aiProvider || 'auto';
+  const detectedProvider = detectApiKeyProvider(activeApiKey, activeProvider);
 
   return (
     <div
@@ -312,17 +308,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Scrollable Content */}
-        <div className="p-4 space-y-5 overflow-y-auto flex-1 text-slate-200 text-sm">
-          {/* Coach Voice & AI Settings Section (Clean Dropdowns) */}
+        <div className="p-4 space-y-4 overflow-y-auto flex-1 text-slate-200 text-sm">
+          {/* Coach Voice & AI Settings Section (Direct Two-Column Grid Layout) */}
           <section className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl">
               <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
                 {localSettings.voiceEnabled ? (
                   <Volume2 className="w-4 h-4" />
                 ) : (
                   <VolumeX className="w-4 h-4 text-slate-400" />
                 )}
-                <span>Coach Voice Output</span>
+                <div>
+                  <span className="block text-xs font-semibold text-slate-100">Coach Voice Output</span>
+                  <span className="block text-[11px] font-normal text-slate-400">
+                    {localSettings.voiceEnabled ? 'Active — Coach speaks feedback aloud' : 'Muted — Text commentary only'}
+                  </span>
+                </div>
               </div>
               <button
                 type="button"
@@ -342,67 +343,67 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
 
             <div className="space-y-3 bg-slate-950/40 p-3.5 rounded-xl border border-slate-800 text-xs">
-              {/* Coaching Mode (coachVerbosity) Dropdown */}
-              <div className="space-y-1">
-                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Coaching Mode</span>
-                </label>
-                <select
-                  value={localSettings.coachVerbosity || 'detailed'}
-                  onChange={(e) => handleChange('coachVerbosity', e.target.value as CoachVerbosity)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                >
-                  <option value="silent">Silent — No Live Commentary</option>
-                  <option value="brief">Brief — Criticize Mistakes & Blunders Only</option>
-                  <option value="detailed">Detailed — Analyze Every Move, Criticize & Suggest</option>
-                  <option value="verbose">Verbose — Deep Tactical & Positional Breakdown</option>
-                </select>
-              </div>
-
-              {/* Coach Style / Persona (coachPersonality) Dropdown */}
-              <div className="space-y-1">
-                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
-                  <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Coach Style / Persona</span>
-                </label>
-                <select
-                  value={localSettings.coachPersonality || 'strict'}
-                  onChange={(e) => handleChange('coachPersonality', e.target.value as CoachPersonality)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                >
-                  <option value="strict">Strict Grandmaster — Direct criticism, demands precision</option>
-                  <option value="supportive">Supportive Mentor — Encouraging, constructive guidance</option>
-                  <option value="aggressive">Tactical Attacker — Focuses on initiative, threats & punishment</option>
-                  <option value="professor">Positional Professor — Strategic plans & structure</option>
-                </select>
-              </div>
-
-              {/* Speech Engine (ttsEngine) Dropdown */}
-              <div className="space-y-1">
-                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
-                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Speech Engine</span>
-                </label>
-                <select
-                  value={activeTtsEngine}
-                  onChange={(e) => handleChange('ttsEngine', e.target.value as TTSEngineType)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                >
-                  <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
-                  <option value="browser">Standard Device TTS (100% Offline)</option>
-                </select>
-              </div>
-
-              {/* Coach Voice (edgeVoice) Dropdown + Compact Test Button */}
-              {activeTtsEngine === 'edge' && (
+              {/* Row 1: Coaching Mode & Coach Style / Persona */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-slate-300 font-semibold">Coach Voice</label>
-                  <div className="flex items-center gap-2">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Coaching Mode</span>
+                  </label>
+                  <select
+                    value={localSettings.coachVerbosity || 'detailed'}
+                    onChange={(e) => handleChange('coachVerbosity', e.target.value as CoachVerbosity)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                  >
+                    <option value="silent">Silent — No Live Commentary</option>
+                    <option value="brief">Brief — Mistakes & Blunders Only</option>
+                    <option value="detailed">Detailed — Analyze & Suggest</option>
+                    <option value="verbose">Verbose — Deep Breakdown</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Coach Style / Persona</span>
+                  </label>
+                  <select
+                    value={localSettings.coachPersonality || 'strict'}
+                    onChange={(e) => handleChange('coachPersonality', e.target.value as CoachPersonality)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                  >
+                    <option value="strict">Strict Grandmaster — Direct precision</option>
+                    <option value="supportive">Supportive Mentor — Encouraging</option>
+                    <option value="aggressive">Tactical Attacker — Initiative & threats</option>
+                    <option value="professor">Positional Professor — Strategic plans</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Row 2: Speech Engine & Coach Voice + Test Button */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Speech Engine</span>
+                  </label>
+                  <select
+                    value={activeTtsEngine}
+                    onChange={(e) => handleChange('ttsEngine', e.target.value as TTSEngineType)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                  >
+                    <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
+                    <option value="browser">Standard Device TTS (100% Offline)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold block">Coach Voice</label>
+                  <div className="flex items-center gap-1.5">
                     <select
                       value={localSettings.edgeVoice || 'en-US-AndrewNeural'}
                       onChange={(e) => handleChange('edgeVoice', e.target.value)}
-                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                      className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                     >
                       {EDGE_NEURAL_VOICES.map((v) => (
                         <option key={v.id} value={v.id}>
@@ -414,7 +415,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       onClick={handleTestEdgeVoice}
                       disabled={isTestingVoice}
-                      className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
+                      className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
                     >
                       {isTestingVoice ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -427,7 +428,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
                 </div>
-              )}
+              </div>
 
               {/* Rate & Volume Sliders */}
               <div className="grid grid-cols-2 gap-3 pt-1">
@@ -528,12 +529,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </section>
 
-          {/* Universal AI API Key Section */}
-          <section className="space-y-3 border-t border-slate-800/80 pt-4">
+          {/* AI Provider & Universal AI API Key Section */}
+          <section className="space-y-2.5 border-t border-slate-800/80 pt-3.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
                 <Key className="w-4 h-4" />
-                <span>Universal AI API Key (Optional)</span>
+                <span>AI Provider & Universal API Key</span>
               </div>
               <span
                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
@@ -543,31 +544,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 }`}
               >
                 {detectedProvider.provider !== 'none'
-                  ? `Detected: ${detectedProvider.label}`
+                  ? `Active: ${detectedProvider.label}`
                   : 'Using Built-in Environment Key / Offline Heuristics'}
               </span>
             </div>
 
             <div className="space-y-2 bg-slate-950/40 p-3 rounded-xl border border-slate-800 text-xs">
-              <div className="relative">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={activeApiKey}
-                  onChange={(e) => handleApiKeyChange(e.target.value)}
-                  placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowKey(!showKey)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <select
+                  value={activeProvider}
+                  onChange={(e) => handleChange('aiProvider', e.target.value as AppSettings['aiProvider'])}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                  title="AI Provider"
                 >
-                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+                  <option value="auto">Auto-Detect (Smart)</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="groq">Groq (Llama 3.3)</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="anthropic">Anthropic Claude</option>
+                  <option value="xai">xAI Grok</option>
+                </select>
+
+                <div className="relative sm:col-span-2">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    value={activeApiKey}
+                    onChange={(e) => handleApiKeyChange(e.target.value)}
+                    placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                  >
+                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
               <p className="text-[11px] text-slate-400 flex items-center gap-1 leading-relaxed">
                 <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Automatically detects Gemini, Groq, OpenAI, Anthropic Claude, OpenRouter, or xAI. Stored locally on your device.</span>
+                <span>Supports Auto-Detect or explicit provider selection (Gemini, Groq, OpenAI, Claude, OpenRouter, xAI). Stored locally on your device.</span>
               </p>
             </div>
           </section>

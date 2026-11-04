@@ -68,7 +68,7 @@ export interface GameResult {
   reason: GameTermination;
 }
 
-export type AIProviderId = 'gemini' | 'groq' | 'openrouter' | 'openai' | 'anthropic' | 'xai' | 'bytez' | 'custom';
+export type AIProviderId = 'auto' | 'gemini' | 'groq' | 'openrouter' | 'openai' | 'anthropic' | 'xai' | 'bytez' | 'custom';
 export type TTSEngineType = 'edge' | 'browser';
 export type CoachVerbosity = 'silent' | 'brief' | 'detailed' | 'verbose';
 export type CoachPersonality = 'supportive' | 'strict' | 'aggressive' | 'professor';

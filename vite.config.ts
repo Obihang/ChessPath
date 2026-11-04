@@ -7,7 +7,7 @@ import { defineConfig, Plugin } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
-const CHROMIUM_FULL_VERSION = '130.0.2849.68';
+const CHROMIUM_FULL_VERSION = '132.0.2957.140';
 const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
 
 function generateSecMsGec(): string {
@@ -59,7 +59,7 @@ function encodeWsFrame(opcode: number, payload: Buffer): Buffer {
   return Buffer.concat([header, maskedPayload]);
 }
 
-function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
+function synthesizeEdgeWebSocket(text: string, voice: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const reqId = crypto.randomBytes(16).toString('hex');
     const secMsGec = generateSecMsGec();
@@ -87,7 +87,7 @@ function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
           `Sec-WebSocket-Key: ${wsKey}`,
           `Sec-WebSocket-Version: 13`,
           `Origin: chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold`,
-          `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0`,
+          `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0`,
           `\r\n`,
         ].join('\r\n');
         socket.write(upgradeReq);
@@ -109,7 +109,7 @@ function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
 
     const timer = setTimeout(() => {
       finish(new Error('Edge TTS WebSocket timed out'));
-    }, 3500);
+    }, 2500);
 
     socket.on('data', (chunk: Buffer) => {
       rxBuffer = Buffer.concat([rxBuffer, chunk]);
@@ -127,7 +127,7 @@ function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
         handshakeComplete = true;
         rxBuffer = rxBuffer.subarray(headerEnd + 4);
 
-        const timestamp = new Date().toISOString();
+        const timestamp = new Date().toUTCString();
         const configMsg =
           `X-Timestamp:${timestamp}\r\n` +
           `Content-Type:application/json; charset=utf-8\r\n` +
@@ -152,7 +152,7 @@ function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
         const ssmlMsg =
           `X-RequestId:${reqId}\r\n` +
           `Content-Type:application/ssml+xml\r\n` +
-          `X-Timestamp:${timestamp}Z\r\n` +
+          `X-Timestamp:${timestamp}\r\n` +
           `Path:ssml\r\n\r\n` +
           `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${xmlLang}'>` +
           `<voice name='${escapeXml(voice)}'>` +
@@ -249,6 +249,54 @@ function synthesizeEdgeTtsMp3(text: string, voice: string): Promise<Buffer> {
   });
 }
 
+function splitTextIntoTtsChunks(text: string, maxLen = 180): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    if (!current) {
+      current = word.slice(0, maxLen);
+    } else if (current.length + 1 + word.length <= maxLen) {
+      current += ` ${word}`;
+    } else {
+      chunks.push(current);
+      current = word.slice(0, maxLen);
+    }
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
+}
+
+async function synthesizeFallbackMp3(text: string, voice: string): Promise<Buffer> {
+  const tl = voice.startsWith('en-GB') ? 'en-GB' : 'en-US';
+  const chunks = splitTextIntoTtsChunks(text, 180);
+  const buffers: Buffer[] = [];
+
+  for (const chunk of chunks) {
+    const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&client=gtx&tl=${encodeURIComponent(tl)}&dt=t&q=${encodeURIComponent(chunk)}`;
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Fallback TTS HTTP ${response.status}`);
+    }
+    const arrayBuf = await response.arrayBuffer();
+    if (arrayBuf.byteLength > 0) {
+      buffers.push(Buffer.from(arrayBuf));
+    }
+  }
+
+  if (buffers.length === 0) {
+    throw new Error('Fallback TTS returned empty audio');
+  }
+  return Buffer.concat(buffers);
+}
+
 function edgeTtsServerPlugin(): Plugin {
   const middleware = async (req: any, res: any, next: () => void) => {
     if (!req.url) {
@@ -277,18 +325,33 @@ function edgeTtsServerPlugin(): Plugin {
       return;
     }
 
+    let mp3Buffer: Buffer | null = null;
+
     try {
-      const mp3Buffer = await synthesizeEdgeTtsMp3(text, voice);
-      res.statusCode = 200;
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Length', String(mp3Buffer.length));
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.end(mp3Buffer);
-    } catch (err: any) {
-      res.statusCode = 502;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: err?.message || 'Edge TTS synthesis failed' }));
+      const edgeBuf = await synthesizeEdgeWebSocket(text, voice);
+      if (edgeBuf && edgeBuf.length > 100) {
+        mp3Buffer = edgeBuf;
+      }
+    } catch {
+      // Edge WebSocket failed or timed out; fall back to Google TTS MP3 below
     }
+
+    if (!mp3Buffer) {
+      try {
+        mp3Buffer = await synthesizeFallbackMp3(text, voice);
+      } catch (err: any) {
+        res.statusCode = 502;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: err?.message || 'TTS synthesis failed' }));
+        return;
+      }
+    }
+
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', String(mp3Buffer.length));
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.end(mp3Buffer);
   };
 
   return {

@@ -298,51 +298,64 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           coachCommentaryService.notifyListeners(commentaryResult);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 4. Speak result via Edge Neural TTS / Browser TTS
-          let firstAudioMs = 0;
+          // 4. Speak result via Edge Neural TTS / Browser TTS without blocking processMove completion
           if (settings.voiceEnabled && !isMuted) {
             if (isPlayerMove) {
               isSpeakingPlayerMoveRef.current = true;
             }
-            const speechRes = await speechService.speakWithCoach(finalComment, settings, {
-              onFirstAudio: (timeToFirst) => {
-                firstAudioMs = timeToFirst;
-              },
-              onEnd: () => {
+            let firstAudioMs = 0;
+            void speechService
+              .speakWithCoach(finalComment, settings, {
+                onFirstAudio: (timeToFirst) => {
+                  firstAudioMs = timeToFirst;
+                },
+                onEnd: () => {
+                  if (currentRequestId === requestIdRef.current) {
+                    isSpeakingPlayerMoveRef.current = false;
+                  }
+                },
+                onError: () => {
+                  if (currentRequestId === requestIdRef.current) {
+                    isSpeakingPlayerMoveRef.current = false;
+                  }
+                },
+              })
+              .then((speechRes) => {
                 if (currentRequestId === requestIdRef.current) {
                   isSpeakingPlayerMoveRef.current = false;
                 }
-              },
-              onError: () => {
-                if (currentRequestId === requestIdRef.current) {
-                  isSpeakingPlayerMoveRef.current = false;
+                if (speechRes.timeToFirstAudioMs) {
+                  firstAudioMs = speechRes.timeToFirstAudioMs;
                 }
-              },
-            });
-            if (currentRequestId === requestIdRef.current) {
-              isSpeakingPlayerMoveRef.current = false;
-            }
-            if (speechRes.timeToFirstAudioMs) {
-              firstAudioMs = speechRes.timeToFirstAudioMs;
-            }
-            if (!speechRes.success && speechRes.error) {
-              setCurrentRecord((prev) => {
-                if (!prev || prev.requestId !== currentRequestId) return prev;
-                return { ...prev, error: `Voice failed: ${speechRes.error}` };
+                if (!speechRes.success && speechRes.error) {
+                  setCurrentRecord((prev) => {
+                    if (!prev || prev.requestId !== currentRequestId) return prev;
+                    return { ...prev, error: `Voice failed: ${speechRes.error}` };
+                  });
+                }
+                const totalMs = Date.now() - moveStartTime;
+                recordMoveTiming({
+                  moveSan: move.san,
+                  mover: isPlayerMove ? 'player' : 'opponent',
+                  engineMs,
+                  textGenMs,
+                  timeToFirstAudioMs: firstAudioMs,
+                  totalMs,
+                  timestamp: new Date().toLocaleTimeString(),
+                });
               });
-            }
+          } else {
+            const totalMs = Date.now() - moveStartTime;
+            recordMoveTiming({
+              moveSan: move.san,
+              mover: isPlayerMove ? 'player' : 'opponent',
+              engineMs,
+              textGenMs,
+              timeToFirstAudioMs: 0,
+              totalMs,
+              timestamp: new Date().toLocaleTimeString(),
+            });
           }
-
-          const totalMs = Date.now() - moveStartTime;
-          recordMoveTiming({
-            moveSan: move.san,
-            mover: isPlayerMove ? 'player' : 'opponent',
-            engineMs,
-            textGenMs,
-            timeToFirstAudioMs: firstAudioMs,
-            totalMs,
-            timestamp: new Date().toLocaleTimeString(),
-          });
         }
       } catch (err: any) {
         if (isPlayerMove && currentRequestId === requestIdRef.current) {

@@ -12,7 +12,9 @@ import {
 } from 'lucide-react';
 import { EDGE_VOICES, speak, stopSpeech } from '../utils/voice';
 import { detectApiKeyProvider } from '../services/coachService';
+import { storageService } from '../services/storageService';
 import {
+  AIProviderId,
   CoachPersonality,
   CoachVerbosity,
   TTSEngineType,
@@ -31,6 +33,12 @@ export interface CoachModalProps {
   setTtsEngine: (engine: TTSEngineType) => void;
   edgeVoice?: string;
   setEdgeVoice?: (voice: string) => void;
+  voiceRate?: number;
+  setVoiceRate?: (rate: number) => void;
+  voiceVolume?: number;
+  setVoiceVolume?: (volume: number) => void;
+  aiProvider?: AIProviderId;
+  setAiProvider?: (provider: AIProviderId) => void;
   aiApiKey?: string;
   setAiApiKey?: (key: string) => void;
   geminiApiKey?: string;
@@ -50,6 +58,12 @@ export const CoachModal: React.FC<CoachModalProps> = ({
   setTtsEngine,
   edgeVoice = 'en-US-AndrewNeural',
   setEdgeVoice,
+  voiceRate = 1.0,
+  setVoiceRate,
+  voiceVolume = 1.0,
+  setVoiceVolume,
+  aiProvider = 'auto',
+  setAiProvider,
   aiApiKey,
   setAiApiKey,
   geminiApiKey = '',
@@ -57,6 +71,9 @@ export const CoachModal: React.FC<CoachModalProps> = ({
 }) => {
   const [showKey, setShowKey] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [localRate, setLocalRate] = useState<number>(() => voiceRate ?? storageService.getSettings().voiceRate ?? 1.0);
+  const [localVolume, setLocalVolume] = useState<number>(() => voiceVolume ?? storageService.getSettings().voiceVolume ?? 1.0);
+  const [localProvider, setLocalProvider] = useState<AIProviderId>(() => aiProvider ?? storageService.getSettings().aiProvider ?? 'auto');
 
   if (!isOpen) return null;
 
@@ -64,9 +81,28 @@ export const CoachModal: React.FC<CoachModalProps> = ({
   const handleKeyChange = (val: string) => {
     setAiApiKey?.(val);
     setGeminiApiKey?.(val);
+    storageService.updateSetting('aiApiKey', val);
   };
 
-  const detectedProvider = detectApiKeyProvider(activeApiKey);
+  const handleProviderChange = (providerVal: AIProviderId) => {
+    setLocalProvider(providerVal);
+    setAiProvider?.(providerVal);
+    storageService.updateSetting('aiProvider', providerVal);
+  };
+
+  const handleRateChange = (rateVal: number) => {
+    setLocalRate(rateVal);
+    setVoiceRate?.(rateVal);
+    storageService.updateSetting('voiceRate', rateVal);
+  };
+
+  const handleVolumeChange = (volVal: number) => {
+    setLocalVolume(volVal);
+    setVoiceVolume?.(volVal);
+    storageService.updateSetting('voiceVolume', volVal);
+  };
+
+  const detectedProvider = detectApiKeyProvider(activeApiKey, localProvider);
 
   const handleTestVoice = async () => {
     setIsTesting(true);
@@ -77,6 +113,8 @@ export const CoachModal: React.FC<CoachModalProps> = ({
         {
           ttsEngine,
           edgeVoice,
+          rate: localRate,
+          volume: localVolume,
           onEnd: () => setIsTesting(false),
           onError: () => setIsTesting(false),
         }
@@ -96,9 +134,9 @@ export const CoachModal: React.FC<CoachModalProps> = ({
         }
       }}
     >
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100">
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-100">
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-slate-800">
+        <div className="flex items-center justify-between px-4 py-3.5 border-b border-slate-800">
           <div className="flex items-center gap-2">
             <GraduationCap className="w-5 h-5 text-amber-400" />
             <h2 className="text-base font-bold">Coach Voice & AI Settings</h2>
@@ -114,9 +152,9 @@ export const CoachModal: React.FC<CoachModalProps> = ({
           </button>
         </div>
 
-        <div className="p-5 space-y-4 text-sm max-h-[80vh] overflow-y-auto">
-          {/* 1. Voice Output (Mute / Active) Toggle */}
-          <div className="flex items-center justify-between p-3 bg-slate-950/50 border border-slate-800 rounded-xl">
+        <div className="p-4 space-y-3.5 text-sm max-h-[82vh] overflow-y-auto">
+          {/* 1. Coach Voice Output (Toggle Switch) */}
+          <div className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl">
             <div className="flex items-center gap-2.5">
               {voiceEnabled ? (
                 <Volume2 className="w-4 h-4 text-amber-400" />
@@ -153,69 +191,69 @@ export const CoachModal: React.FC<CoachModalProps> = ({
             </button>
           </div>
 
-          {/* 2. Coaching Mode (coachVerbosity) Dropdown */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-              <span>Coaching Mode</span>
-            </label>
-            <select
-              value={coachVerbosity}
-              onChange={(e) => setCoachVerbosity?.(e.target.value as CoachVerbosity)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
-            >
-              <option value="silent">Silent — No Live Commentary</option>
-              <option value="brief">Brief — Criticize Mistakes & Blunders Only</option>
-              <option value="detailed">Detailed — Analyze Every Move, Criticize & Suggest</option>
-              <option value="verbose">Verbose — Deep Tactical & Positional Breakdown</option>
-            </select>
+          {/* 2. Two-Column Grid: Coaching Mode & Coach Style / Persona */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Coaching Mode</span>
+              </label>
+              <select
+                value={coachVerbosity}
+                onChange={(e) => setCoachVerbosity?.(e.target.value as CoachVerbosity)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
+              >
+                <option value="silent">Silent — No Live Commentary</option>
+                <option value="brief">Brief — Mistakes & Blunders Only</option>
+                <option value="detailed">Detailed — Analyze & Suggest</option>
+                <option value="verbose">Verbose — Deep Breakdown</option>
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
+                <span>Coach Style / Persona</span>
+              </label>
+              <select
+                value={coachPersonality}
+                onChange={(e) => setCoachPersonality?.(e.target.value as CoachPersonality)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
+              >
+                <option value="strict">Strict Grandmaster — Direct precision</option>
+                <option value="supportive">Supportive Mentor — Encouraging</option>
+                <option value="aggressive">Tactical Attacker — Initiative & threats</option>
+                <option value="professor">Positional Professor — Strategic plans</option>
+              </select>
+            </div>
           </div>
 
-          {/* 3. Coach Style / Persona (coachPersonality) Dropdown */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
-              <span>Coach Style / Persona</span>
-            </label>
-            <select
-              value={coachPersonality}
-              onChange={(e) => setCoachPersonality?.(e.target.value as CoachPersonality)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
-            >
-              <option value="strict">Strict Grandmaster — Direct criticism, demands precision</option>
-              <option value="supportive">Supportive Mentor — Encouraging, constructive guidance</option>
-              <option value="aggressive">Tactical Attacker — Focuses on initiative, threats & punishment</option>
-              <option value="professor">Positional Professor — Strategic plans & structure</option>
-            </select>
-          </div>
+          {/* 3. Speech Engine & Coach Voice + Test Button */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>Speech Engine</span>
+              </label>
+              <select
+                value={ttsEngine}
+                onChange={(e) => setTtsEngine(e.target.value as TTSEngineType)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
+              >
+                <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
+                <option value="browser">Standard Device TTS (100% Offline)</option>
+              </select>
+            </div>
 
-          {/* 4. Speech Engine (ttsEngine) Dropdown */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-              <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-              <span>Speech Engine</span>
-            </label>
-            <select
-              value={ttsEngine}
-              onChange={(e) => setTtsEngine(e.target.value as TTSEngineType)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
-            >
-              <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
-              <option value="browser">Standard Device TTS (100% Offline)</option>
-            </select>
-          </div>
-
-          {/* 5. Coach Voice (edgeVoice) Dropdown + Compact Test Button */}
-          {ttsEngine === 'edge' && (
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <label className="text-xs font-semibold text-slate-300 block">
                 Coach Voice
               </label>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <select
                   value={edgeVoice}
                   onChange={(e) => setEdgeVoice?.(e.target.value)}
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
+                  className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
                 >
                   {EDGE_VOICES.map((v) => (
                     <option key={v.id} value={v.id}>
@@ -227,21 +265,56 @@ export const CoachModal: React.FC<CoachModalProps> = ({
                   type="button"
                   onClick={handleTestVoice}
                   disabled={isTesting}
-                  className="px-3.5 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-semibold rounded-xl text-xs transition-colors shrink-0 flex items-center gap-1.5"
+                  className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-semibold rounded-xl text-xs transition-colors shrink-0 flex items-center gap-1"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
-                  <span>{isTesting ? 'Playing...' : 'Test'}</span>
+                  <span>{isTesting ? '...' : 'Test'}</span>
                 </button>
               </div>
             </div>
-          )}
+          </div>
 
-          {/* 6. Universal AI API Key Input (aiApiKey) */}
-          <div className="space-y-2 pt-3 border-t border-slate-800">
+          {/* 4. Compact Speed & Volume Sliders */}
+          <div className="grid grid-cols-2 gap-3 p-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-xs">
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Speed</span>
+                <span className="font-mono text-slate-200">{localRate.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={localRate}
+                onChange={(e) => handleRateChange(parseFloat(e.target.value))}
+                className="w-full accent-amber-500 cursor-pointer"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Volume</span>
+                <span className="font-mono text-slate-200">{Math.round(localVolume * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.1"
+                max="1.0"
+                step="0.1"
+                value={localVolume}
+                onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                className="w-full accent-amber-500 cursor-pointer"
+              />
+            </div>
+          </div>
+
+          {/* 5. AI Provider Dropdown + Universal AI API Key Input */}
+          <div className="space-y-2.5 pt-2.5 border-t border-slate-800">
             <div className="flex items-center justify-between gap-2">
               <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
                 <Key className="w-3.5 h-3.5 text-amber-400" />
-                <span>Universal AI API Key (Optional)</span>
+                <span>AI Provider & Universal API Key</span>
               </label>
               <span
                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
@@ -251,27 +324,45 @@ export const CoachModal: React.FC<CoachModalProps> = ({
                 }`}
               >
                 {detectedProvider.provider !== 'none'
-                  ? `Detected: ${detectedProvider.label}`
-                  : 'Using Built-in Environment Key / Offline Heuristics'}
+                  ? `Active: ${detectedProvider.label}`
+                  : 'Offline Heuristics / Built-in Key'}
               </span>
             </div>
 
-            <div className="relative">
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={activeApiKey}
-                onChange={(e) => handleKeyChange(e.target.value)}
-                placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 pr-9 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <select
+                value={localProvider}
+                onChange={(e) => handleProviderChange(e.target.value as AIProviderId)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-100 focus:outline-hidden focus:border-amber-500"
+                title="AI Provider"
               >
-                {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+                <option value="auto">Auto-Detect (Smart)</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="groq">Groq (Llama 3.3)</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="xai">xAI Grok</option>
+              </select>
+
+              <div className="relative sm:col-span-2">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={activeApiKey}
+                  onChange={(e) => handleKeyChange(e.target.value)}
+                  placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 pr-9 text-xs font-mono text-slate-100 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
+
             <p className="text-[11px] text-slate-400 flex items-center gap-1">
               <Cpu className="w-3 h-3 text-emerald-400 shrink-0" />
               <span>Supports Gemini, Groq, OpenAI, Claude, OpenRouter & xAI. Stored locally on device.</span>
@@ -279,7 +370,7 @@ export const CoachModal: React.FC<CoachModalProps> = ({
           </div>
         </div>
 
-        <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex justify-end">
+        <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/40 flex justify-end">
           <button
             type="button"
             onClick={() => {

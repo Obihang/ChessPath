@@ -67,6 +67,21 @@ export default function App() {
     setProgress(storageService.getProgress());
   };
 
+  const handleVerbosityChange = (verbosity: AppSettings['coachVerbosity']) => {
+    if (!verbosity) return;
+    let updated = storageService.updateSetting('coachVerbosity', verbosity);
+    updated = storageService.updateSetting('liveCoachEnabled', verbosity !== 'silent');
+    setSettings(updated);
+    setProgress(storageService.getProgress());
+  };
+
+  const handlePersonalityChange = (personality: AppSettings['coachPersonality']) => {
+    if (!personality) return;
+    const updated = storageService.updateSetting('coachPersonality', personality);
+    setSettings(updated);
+    setProgress(storageService.getProgress());
+  };
+
   // Progress Handlers
   const handleCompleteLesson = (lessonId: string) => {
     if (!progress.completedLessonIds.includes(lessonId)) {
@@ -157,6 +172,8 @@ export default function App() {
             onOpenCoach={() => setIsCoachOpen(true)}
             onPositionChange={handlePositionChange}
             onUpdateSettings={handleUpdateSettings}
+            onVerbosityChange={handleVerbosityChange}
+            onPersonalityChange={handlePersonalityChange}
           />
         )}
 

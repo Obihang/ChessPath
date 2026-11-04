@@ -50,6 +50,8 @@ interface PlayViewProps {
   onOpenCoach: () => void;
   onPositionChange?: (fen: string, history: string[]) => void;
   onUpdateSettings?: (settings: AppSettings) => void;
+  onVerbosityChange?: (verbosity: CoachVerbosity) => void;
+  onPersonalityChange?: (personality: CoachPersonality) => void;
   isAnalyzingPlayerMoveExternalRef?: React.MutableRefObject<boolean>;
 }
 
@@ -66,6 +68,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
   onOpenCoach,
   onPositionChange,
   onUpdateSettings,
+  onVerbosityChange,
+  onPersonalityChange,
   isAnalyzingPlayerMoveExternalRef,
 }) => {
   // Game Configuration
@@ -114,13 +118,16 @@ export const PlayView: React.FC<PlayViewProps> = ({
   };
 
   const handleVerbosityChange = (newVerbosity: CoachVerbosity) => {
-    const updated = storageService.updateSetting('coachVerbosity', newVerbosity);
+    let updated = storageService.updateSetting('coachVerbosity', newVerbosity);
+    updated = storageService.updateSetting('liveCoachEnabled', newVerbosity !== 'silent');
     onUpdateSettings?.(updated);
+    onVerbosityChange?.(newVerbosity);
   };
 
   const handlePersonalityChange = (newPersonality: CoachPersonality) => {
     const updated = storageService.updateSetting('coachPersonality', newPersonality);
     onUpdateSettings?.(updated);
+    onPersonalityChange?.(newPersonality);
   };
 
   // Active Game State
@@ -420,45 +427,69 @@ export const PlayView: React.FC<PlayViewProps> = ({
     }
   };
 
-  // Handle User Move on Board
-  const handleUserMove = (moveData: {
-    from: string;
-    to: string;
-    promotion?: string;
-    san?: string;
-    before?: string;
-    after?: string;
-  }) => {
+  // Analyze & comment on player move, then trigger computer reply once text analysis is ready (before speech finishes)
+  const analyzeAndCommentPlayerMove = async (
+    userMoveRec: MoveRecord,
+    prevFen: string,
+    currentFen: string,
+    currentSanList: string[],
+    nextGame: Chess,
+    ended: boolean
+  ) => {
+    setCustomArrow(null);
+    await processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
+
+    if (mode === 'ai' && !ended && nextGame.turn() !== playerColor) {
+      await triggerAiMove(nextGame);
+    }
+  };
+
+  // Unified player move handler used by both click-to-move (handleMoveClick) and drag-and-drop (onDrop)
+  const handlePlayerMove = (
+    from: string,
+    to: string,
+    promotion: string = 'q',
+    moveData?: {
+      san?: string;
+      before?: string;
+      after?: string;
+    }
+  ): boolean => {
     speechService.unlock();
-    setLastMove({ from: moveData.from, to: moveData.to });
 
     const history = game.history({ verbose: true });
-    const lastHist = history[history.length - 1];
+    let lastHist = history[history.length - 1];
 
-    if (lastHist) {
-      const prevFen = moveData.before || lastHist.before;
-      const currentFen = moveData.after || lastHist.after;
-
-      const userMoveRec: MoveRecord = {
-        san: lastHist.san,
-        from: lastHist.from,
-        to: lastHist.to,
-        color: lastHist.color,
-        piece: lastHist.piece,
-        captured: lastHist.captured,
-        fen: currentFen,
-        before: prevFen,
-        after: currentFen,
-      };
-      setMoves((prev) => [...prev, userMoveRec]);
-
-      // Process live coach commentary for player move using exact move.before and move.after FENs
-      setCustomArrow(null);
-      const currentSanList = [...moves.map((m) => m.san), lastHist.san];
-      processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
+    // If ChessBoard did not pre-apply the move to `game`, validate and execute it synchronously
+    if (!lastHist || lastHist.from !== from || lastHist.to !== to) {
+      try {
+        const applied = game.move({ from, to, promotion });
+        if (!applied) return false;
+        lastHist = applied;
+      } catch {
+        return false;
+      }
     }
 
-    const nextGame = new Chess(moveData.after || game.fen());
+    const prevFen = moveData?.before || lastHist.before;
+    const currentFen = moveData?.after || lastHist.after;
+
+    const userMoveRec: MoveRecord = {
+      san: lastHist.san,
+      from: lastHist.from,
+      to: lastHist.to,
+      color: lastHist.color,
+      piece: lastHist.piece,
+      captured: lastHist.captured,
+      fen: currentFen,
+      before: prevFen,
+      after: currentFen,
+    };
+
+    setLastMove({ from, to });
+    setMoves((prev) => [...prev, userMoveRec]);
+
+    const nextGame = new Chess(currentFen);
     setGame(nextGame);
     calculateCapturedAndAdvantage(nextGame);
 
@@ -479,10 +510,21 @@ export const PlayView: React.FC<PlayViewProps> = ({
       setBoardOrientation((prev) => (prev === 'w' ? 'b' : 'w'));
     }
 
-    // Trigger AI move if in AI mode and it's AI's turn
-    if (mode === 'ai' && !ended && nextGame.turn() !== playerColor) {
-      triggerAiMove(nextGame);
-    }
+    const currentSanList = [...moves.map((m) => m.san), lastHist.san];
+    void analyzeAndCommentPlayerMove(userMoveRec, prevFen, currentFen, currentSanList, nextGame, ended);
+    return true;
+  };
+
+  // Handle User Move on Board (both click-to-move and drag-and-drop)
+  const handleUserMove = (moveData: {
+    from: string;
+    to: string;
+    promotion?: string;
+    san?: string;
+    before?: string;
+    after?: string;
+  }) => {
+    handlePlayerMove(moveData.from, moveData.to, moveData.promotion || 'q', moveData);
   };
 
   // On-demand Coach Hint / Suggestion
@@ -716,6 +758,10 @@ export const PlayView: React.FC<PlayViewProps> = ({
           isMuted={isCoachMuted}
           onToggleMute={toggleCoachMute}
           mode={settings.coachMode}
+          coachVerbosity={settings.coachVerbosity || 'detailed'}
+          coachPersonality={settings.coachPersonality || 'strict'}
+          onVerbosityChange={handleVerbosityChange}
+          onPersonalityChange={handlePersonalityChange}
           facts={commentFacts}
           isAnalyzing={isCoachAnalyzing}
           error={coachError}
@@ -726,9 +772,9 @@ export const PlayView: React.FC<PlayViewProps> = ({
         />
       )}
 
-      {/* Live Coach Controls: On/Off Switch & Clean Dropdowns */}
+      {/* Live Coach Header Bar with Quick Mode & Persona Dropdowns */}
       <div className="w-full max-w-[520px] bg-slate-900/80 border border-slate-800 rounded-xl p-2.5 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <div
               className={`p-1.5 rounded-lg ${
@@ -752,7 +798,33 @@ export const PlayView: React.FC<PlayViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+            {/* Compact Mode Dropdown right in the Coach header bar */}
+            <select
+              value={settings.coachVerbosity || (settings.liveCoachEnabled ? 'detailed' : 'silent')}
+              onChange={(e) => handleVerbosityChange(e.target.value as CoachVerbosity)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium rounded-lg px-2 py-1 focus:outline-hidden focus:border-amber-500"
+              title="Coaching Mode"
+            >
+              <option value="silent">Silent</option>
+              <option value="brief">Brief</option>
+              <option value="detailed">Detailed</option>
+              <option value="verbose">Verbose</option>
+            </select>
+
+            {/* Compact Coach Persona Dropdown right in the Coach header bar */}
+            <select
+              value={settings.coachPersonality || 'strict'}
+              onChange={(e) => handlePersonalityChange(e.target.value as CoachPersonality)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] font-medium rounded-lg px-2 py-1 focus:outline-hidden focus:border-amber-500"
+              title="Coach Persona"
+            >
+              <option value="strict">Strict GM</option>
+              <option value="supportive">Supportive</option>
+              <option value="aggressive">Aggressive</option>
+              <option value="professor">Professor</option>
+            </select>
+
             <button
               type="button"
               onClick={() => {
@@ -794,35 +866,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
             </button>
           </div>
         </div>
-
-        {/* Coaching Mode & Persona Dropdowns */}
-        {settings.liveCoachEnabled && (
-          <div className="pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <select
-              value={settings.coachVerbosity || 'detailed'}
-              onChange={(e) => handleVerbosityChange(e.target.value as CoachVerbosity)}
-              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-hidden focus:border-amber-500"
-              title="Coaching Mode"
-            >
-              <option value="silent">Silent — No Live Commentary</option>
-              <option value="brief">Brief — Mistakes & Blunders Only</option>
-              <option value="detailed">Detailed — Analyze & Suggest</option>
-              <option value="verbose">Verbose — Deep Tactical Breakdown</option>
-            </select>
-
-            <select
-              value={settings.coachPersonality || 'strict'}
-              onChange={(e) => handlePersonalityChange(e.target.value as CoachPersonality)}
-              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-hidden focus:border-amber-500"
-              title="Coach Style / Persona"
-            >
-              <option value="strict">Strict Grandmaster</option>
-              <option value="supportive">Supportive Mentor</option>
-              <option value="aggressive">Tactical Attacker</option>
-              <option value="professor">Positional Professor</option>
-            </select>
-          </div>
-        )}
       </div>
 
       {fallbackNotice && (

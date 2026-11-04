@@ -92,10 +92,40 @@ export function getResolvedAiApiKey(explicitKey?: string): string {
   return envKey.trim();
 }
 
+const PROVIDER_PRESETS: Record<Exclude<SmartAIProvider, 'none'>, { label: string; model: string }> = {
+  gemini: { label: 'Google Gemini', model: 'gemini-2.5-flash' },
+  groq: { label: 'Groq (Llama 3.3 70B)', model: 'llama-3.3-70b-versatile' },
+  openai: { label: 'OpenAI', model: 'gpt-4o-mini' },
+  openrouter: { label: 'OpenRouter', model: 'meta-llama/llama-3.3-70b-instruct' },
+  anthropic: { label: 'Anthropic Claude', model: 'claude-3-5-haiku-latest' },
+  xai: { label: 'xAI Grok', model: 'grok-2-latest' },
+};
+
+function getSavedProviderOverride(): string {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const settingsRaw = localStorage.getItem(SETTINGS_KEY);
+      if (settingsRaw) {
+        const parsed = JSON.parse(settingsRaw);
+        if (parsed?.aiProvider && typeof parsed.aiProvider === 'string') {
+          return parsed.aiProvider;
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return 'auto';
+}
+
 /**
- * Automatically detects the AI provider, label, and default fast model from an API key prefix.
+ * Automatically detects the AI provider, label, and default fast model from an API key prefix,
+ * or uses the explicitly selected provider when not set to 'auto'.
  */
-export function detectApiKeyProvider(rawKey?: string): {
+export function detectApiKeyProvider(
+  rawKey?: string,
+  explicitProvider?: string
+): {
   provider: SmartAIProvider;
   label: string;
   model: string;
@@ -110,47 +140,37 @@ export function detectApiKeyProvider(rawKey?: string): {
     };
   }
 
-  if (key.startsWith('AIza')) {
+  const chosenProvider = explicitProvider || getSavedProviderOverride();
+  if (
+    chosenProvider &&
+    chosenProvider !== 'auto' &&
+    chosenProvider in PROVIDER_PRESETS
+  ) {
+    const preset = PROVIDER_PRESETS[chosenProvider as Exclude<SmartAIProvider, 'none'>];
     return {
-      provider: 'gemini',
-      label: 'Google Gemini',
-      model: 'gemini-2.5-flash',
+      provider: chosenProvider as SmartAIProvider,
+      label: preset.label,
+      model: preset.model,
     };
+  }
+
+  if (key.startsWith('AIza')) {
+    return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
   }
   if (key.startsWith('gsk_')) {
-    return {
-      provider: 'groq',
-      label: 'Groq (Llama 3.3 70B)',
-      model: 'llama-3.3-70b-versatile',
-    };
+    return { provider: 'groq', ...PROVIDER_PRESETS.groq };
   }
   if (key.startsWith('sk-ant-')) {
-    return {
-      provider: 'anthropic',
-      label: 'Anthropic Claude',
-      model: 'claude-3-5-haiku-latest',
-    };
+    return { provider: 'anthropic', ...PROVIDER_PRESETS.anthropic };
   }
   if (key.startsWith('sk-or-')) {
-    return {
-      provider: 'openrouter',
-      label: 'OpenRouter',
-      model: 'meta-llama/llama-3.3-70b-instruct',
-    };
+    return { provider: 'openrouter', ...PROVIDER_PRESETS.openrouter };
   }
   if (key.startsWith('xai-')) {
-    return {
-      provider: 'xai',
-      label: 'xAI Grok',
-      model: 'grok-2-latest',
-    };
+    return { provider: 'xai', ...PROVIDER_PRESETS.xai };
   }
   if (key.startsWith('sk-')) {
-    return {
-      provider: 'openai',
-      label: 'OpenAI',
-      model: 'gpt-4o-mini',
-    };
+    return { provider: 'openai', ...PROVIDER_PRESETS.openai };
   }
 
   return {

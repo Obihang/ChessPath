@@ -14,6 +14,8 @@ export interface PlayVsComputerProps {
   onOpenCoach: () => void;
   onPositionChange?: (fen: string, history: string[]) => void;
   onUpdateSettings?: (settings: AppSettings) => void;
+  onVerbosityChange?: (verbosity: CoachVerbosity) => void;
+  onPersonalityChange?: (personality: CoachPersonality) => void;
 }
 
 let isAnalyzingPlayerMoveFlag = false;
@@ -137,6 +139,7 @@ export async function evaluateAndSpeakLiveMove(params: {
       }
     }
   } finally {
+    // Clear isAnalyzingPlayerMoveFlag BEFORE speak() finishes so the computer doesn't freeze waiting for audio
     if (isPlayerMove) {
       isAnalyzingPlayerMoveFlag = false;
     }
@@ -158,6 +161,8 @@ export async function evaluateAndSpeakLiveMove(params: {
 export const PlayVsComputer: React.FC<PlayVsComputerProps> = ({
   settings,
   progress,
+  onVerbosityChange,
+  onPersonalityChange,
   ...rest
 }) => {
   const isAnalyzingPlayerMoveRef = useRef<boolean>(false);
@@ -174,6 +179,8 @@ export const PlayVsComputer: React.FC<PlayVsComputerProps> = ({
   return (
     <PlayView
       settings={mergedSettings}
+      onVerbosityChange={onVerbosityChange}
+      onPersonalityChange={onPersonalityChange}
       isAnalyzingPlayerMoveExternalRef={isAnalyzingPlayerMoveRef}
       {...rest}
     />
