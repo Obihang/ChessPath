@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { storageService, PROGRESS_KEY } from './storageService';
 import { GEMINI_MODELS } from '../constants/aiModels';
 import { base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
@@ -12,8 +11,8 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
 }
 
 /**
- * Resolves the Gemini API key by checking user's saved `aiApiKey` / `geminiApiKey` in localStorage
- * (`chesspath_progress_v1` first, then `chesspath_settings_v1`), falling back to `process.env.GEMINI_API_KEY`.
+ * Resolves any optional custom key from localStorage (`chesspath_progress_v1` first, then `chesspath_settings_v1`).
+ * Server-side Gemini endpoints use `process.env.GEMINI_API_KEY` on the server automatically.
  */
 export function getGeminiVoiceApiKey(customKey?: string): string {
   let progressKey = '';
@@ -33,17 +32,11 @@ export function getGeminiVoiceApiKey(customKey?: string): string {
   }
 
   const settings = storageService.getSettings();
-  const envKey =
-    (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
-    (typeof process !== 'undefined' && process.env ? process.env.GEMINI_API_KEY : '') ||
-    '';
-
   const rawKey = (
     customKey ||
     progressKey ||
     settings.aiApiKey ||
     settings.geminiApiKey ||
-    envKey ||
     ''
   ).trim();
 
@@ -59,20 +52,6 @@ export function getTextProviderApiKey(customKey?: string): string {
 
 export function getActiveApiKey(customKey?: string): string {
   return getTextProviderApiKey(customKey);
-}
-
-function getGeminiClient(customKey?: string): GoogleGenAI | null {
-  const apiKey = getGeminiVoiceApiKey(customKey);
-  if (!apiKey) {
-    return null;
-  }
-
-  try {
-    return new GoogleGenAI({ apiKey });
-  } catch (e) {
-    console.warn('Failed to initialize GoogleGenAI client', e);
-    return null;
-  }
 }
 
 export const DEFAULT_TEXT_MODEL = GEMINI_MODELS.TEXT_PRIMARY;
@@ -185,7 +164,7 @@ export const geminiService = {
   },
 
   hasGeminiVoiceKey(): boolean {
-    return !!getGeminiVoiceApiKey();
+    return true;
   },
 
   hasTextProviderKey(): boolean {
@@ -293,14 +272,8 @@ Keep the tone encouraging, constructive, and inspiring!`;
   async transcribeAudio(
     audioBlob: Blob,
     customMimeType?: string,
-    customKey?: string
+    _customKey?: string
   ): Promise<{ success: boolean; transcript?: string; error?: string }> {
-    const settings = storageService.getSettings();
-    const ai = getGeminiClient(customKey || settings.geminiApiKey);
-    if (!ai) {
-      return { success: false, error: 'NO_KEY: No Gemini API key found for audio transcription.' };
-    }
-
     try {
       const arrayBuf = await audioBlob.arrayBuffer();
       const bytes = new Uint8Array(arrayBuf);
@@ -311,36 +284,21 @@ Keep the tone encouraging, constructive, and inspiring!`;
       const base64Data = btoa(binary);
       const mimeType = customMimeType || audioBlob.type || 'audio/webm';
 
-      const promptPart = { text: 'Transcribe exactly, return only the transcript' };
-      const audioPart = {
-        inlineData: {
+      const response = await fetch('/api/gemini/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioBase64: base64Data,
           mimeType,
-          data: base64Data,
-        },
-      };
+        }),
+      });
 
-      let resultText = '';
-      try {
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODELS.STT_PRIMARY,
-          contents: [{ role: 'user', parts: [audioPart, promptPart] }],
-        });
-        resultText = response.text || '';
-      } catch (primaryErr: any) {
-        const errMsg = primaryErr?.message || '';
-        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('NotFound')) {
-          console.warn(`STT Model ${GEMINI_MODELS.STT_PRIMARY} unavailable, retrying with ${GEMINI_MODELS.STT_FALLBACK}...`);
-          const fallbackRes = await ai.models.generateContent({
-            model: GEMINI_MODELS.STT_FALLBACK,
-            contents: [{ role: 'user', parts: [audioPart, promptPart] }],
-          });
-          resultText = fallbackRes.text || '';
-        } else {
-          throw primaryErr;
-        }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || `Gemini STT HTTP ${response.status}`);
       }
 
-      const cleanTranscript = stripMarkdown(resultText).replace(/^["']|["']$/g, '').trim();
+      const cleanTranscript = stripMarkdown(data.transcript || '').replace(/^["']|["']$/g, '').trim();
       return { success: true, transcript: cleanTranscript };
     } catch (e: any) {
       console.warn('Gemini STT error:', e);
@@ -366,25 +324,25 @@ Keep the tone encouraging, constructive, and inspiring!`;
     const provider = options?.provider || settings.aiProvider || 'gemini';
     const apiKey = (options?.apiKey || getActiveApiKey()).trim();
 
-    if (!apiKey) {
-      return { success: false, error: `No API key provided for ${provider}. Please enter a valid API key.` };
-    }
-
-    if (provider === 'gemini') {
-      const ai = getGeminiClient(apiKey);
-      if (!ai) {
-        return { success: false, error: 'Failed to initialize Gemini client with key.' };
-      }
+    if (provider === 'gemini' || provider === 'auto') {
       try {
-        const response = await ai.models.generateContent({
-          model: rememberedTextModel,
-          contents: 'Say "Chess coach connection verified!" in one short sentence.',
+        const res = await fetch('/api/gemini/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
         });
-        return { success: true, reply: response.text?.trim() || 'Connected to Gemini successfully!' };
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.success) {
+          return { success: false, error: data?.error || `Gemini HTTP ${res.status}` };
+        }
+        return { success: true, reply: data.reply || 'Connected to Gemini successfully!' };
       } catch (e: any) {
         const msg = e?.message || 'Failed to connect to Gemini.';
         return { success: false, error: msg };
       }
+    }
+
+    if (!apiKey) {
+      return { success: false, error: `No API key provided for ${provider}. Please enter a valid API key.` };
     }
 
     let baseUrl = options?.baseUrl || settings.aiBaseUrl || '';

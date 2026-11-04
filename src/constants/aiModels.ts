@@ -4,12 +4,12 @@
 
 export const GEMINI_MODELS = {
   // Basic & Complex Text Tasks
-  TEXT_PRIMARY: 'gemini-3-flash-preview',
-  TEXT_FALLBACK: 'gemini-2.5-flash',
+  TEXT_PRIMARY: 'gemini-3.8-flash',
+  TEXT_FALLBACK: 'gemini-flash-latest',
 
   // Audio Transcription (STT)
   STT_PRIMARY: 'gemini-3.5-transcribe',
-  STT_FALLBACK: 'gemini-3-flash-preview',
+  STT_FALLBACK: 'gemini-3.8-flash',
 } as const;
 
 export interface EdgeVoiceOption {

@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import { CoachPersonality, CoachVerbosity } from '../types/chess';
 import { PROGRESS_KEY, SETTINGS_KEY } from './storageService';
 
@@ -54,8 +53,8 @@ export function getResolvedCoachPersonality(explicitPersonality?: CoachPersonali
 }
 
 /**
- * Resolves the user's saved AI API key from localStorage (`chesspath_progress_v1` or `chesspath_settings_v1`),
- * falling back to `process.env.GEMINI_API_KEY`.
+ * Resolves the user's saved 3rd-party AI API key from localStorage (`chesspath_progress_v1` or `chesspath_settings_v1`).
+ * Gemini calls are handled on the server via `/api/gemini/*`.
  */
 export function getResolvedAiApiKey(explicitKey?: string): string {
   if (explicitKey !== undefined && explicitKey.trim() !== '') {
@@ -85,15 +84,11 @@ export function getResolvedAiApiKey(explicitKey?: string): string {
     }
   }
 
-  const envKey =
-    (typeof process !== 'undefined' && process.env ? process.env.GEMINI_API_KEY : '') ||
-    (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_GEMINI_API_KEY) ||
-    '';
-  return envKey.trim();
+  return '';
 }
 
 const PROVIDER_PRESETS: Record<Exclude<SmartAIProvider, 'none'>, { label: string; model: string }> = {
-  gemini: { label: 'Google Gemini', model: 'gemini-2.5-flash' },
+  gemini: { label: 'Google Gemini', model: 'gemini-3.8-flash' },
   groq: { label: 'Groq (Llama 3.3 70B)', model: 'llama-3.3-70b-versatile' },
   openai: { label: 'OpenAI', model: 'gpt-4o-mini' },
   openrouter: { label: 'OpenRouter', model: 'meta-llama/llama-3.3-70b-instruct' },
@@ -120,7 +115,7 @@ function getSavedProviderOverride(): string {
 
 /**
  * Automatically detects the AI provider, label, and default fast model from an API key prefix,
- * or uses the explicitly selected provider when not set to 'auto'.
+ * or uses the server-backed Google Gemini provider by default so the app works for everyone who opens it.
  */
 export function detectApiKeyProvider(
   rawKey?: string,
@@ -131,21 +126,20 @@ export function detectApiKeyProvider(
   model: string;
 } {
   const key = getResolvedAiApiKey(rawKey);
+  const chosenProvider = explicitProvider || getSavedProviderOverride();
 
-  if (!key) {
-    return {
-      provider: 'none',
-      label: 'Using Built-in Environment Key / Offline Heuristics',
-      model: 'offline',
-    };
+  if (chosenProvider === 'gemini') {
+    return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
   }
 
-  const chosenProvider = explicitProvider || getSavedProviderOverride();
   if (
     chosenProvider &&
     chosenProvider !== 'auto' &&
     chosenProvider in PROVIDER_PRESETS
   ) {
+    if (!key) {
+      return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
+    }
     const preset = PROVIDER_PRESETS[chosenProvider as Exclude<SmartAIProvider, 'none'>];
     return {
       provider: chosenProvider as SmartAIProvider,
@@ -154,7 +148,7 @@ export function detectApiKeyProvider(
     };
   }
 
-  if (key.startsWith('AIza')) {
+  if (!key || key.startsWith('AIza')) {
     return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
   }
   if (key.startsWith('gsk_')) {
@@ -174,14 +168,70 @@ export function detectApiKeyProvider(
   }
 
   return {
-    provider: 'openai',
-    label: 'OpenAI-Compatible Key',
-    model: 'gpt-4o-mini',
+    provider: 'gemini',
+    ...PROVIDER_PRESETS.gemini,
   };
 }
 
 /**
- * Unified multi-provider AI dispatcher supporting Gemini, Groq, OpenAI, OpenRouter, xAI, and Anthropic.
+ * Server-side Gemini streaming helper via SSE (`POST /api/gemini/stream`).
+ */
+export async function streamSmartAI(
+  prompt: string,
+  systemInstruction: string,
+  onChunk?: (chunkText: string) => void
+): Promise<string> {
+  const response = await fetch('/api/gemini/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      systemInstruction,
+      model: 'gemini-3.8-flash',
+    }),
+  });
+
+  if (!response.ok || !response.body) {
+    const errData = await response.json().catch(() => ({}));
+    throw new Error(errData?.error || `Gemini Stream HTTP ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') break;
+        try {
+          const parsed = JSON.parse(payload);
+          if (parsed.error) {
+            throw new Error(parsed.error);
+          }
+          if (parsed.text) {
+            fullText += parsed.text;
+            onChunk?.(parsed.text);
+          }
+        } catch (e: any) {
+          if (e?.message && !e.message.includes('JSON')) throw e;
+        }
+      }
+    }
+  }
+
+  return fullText.trim();
+}
+
+/**
+ * Unified multi-provider AI dispatcher supporting server-side Gemini as well as Groq, OpenAI, OpenRouter, xAI, and Anthropic.
  */
 export async function callSmartAI(
   prompt: string,
@@ -191,35 +241,28 @@ export async function callSmartAI(
   const apiKey = getResolvedAiApiKey(explicitKey);
   const detected = detectApiKeyProvider(apiKey);
 
-  if (detected.provider === 'none' || !apiKey) {
-    throw new Error('NO_KEY');
+  if (detected.provider === 'gemini') {
+    const response = await fetch('/api/gemini/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        systemInstruction,
+        model: detected.model || 'gemini-3.8-flash',
+      }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData?.error || `Gemini HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    return (data?.text || '').trim();
   }
 
-  if (detected.provider === 'gemini') {
-    const ai = new GoogleGenAI({ apiKey });
-    try {
-      const response = await ai.models.generateContent({
-        model: detected.model,
-        contents: prompt,
-        config: {
-          systemInstruction,
-        },
-      });
-      return (response.text || '').trim();
-    } catch (err: any) {
-      const msg = err?.message || '';
-      if (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound')) {
-        const fallback = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: prompt,
-          config: {
-            systemInstruction,
-          },
-        });
-        return (fallback.text || '').trim();
-      }
-      throw err;
-    }
+  if (detected.provider === 'none' || !apiKey) {
+    throw new Error('NO_KEY');
   }
 
   if (detected.provider === 'anthropic') {
