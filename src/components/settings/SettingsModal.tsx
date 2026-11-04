@@ -1,11 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { AppSettings, AIProviderId, BoardThemeId, TTSEngineType } from '../../types/chess';
+import {
+  AppSettings,
+  BoardThemeId,
+  CoachPersonality,
+  CoachVerbosity,
+  TTSEngineType,
+} from '../../types/chess';
 import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
 import { storageService } from '../../services/storageService';
 import { getMoveTimingLogs, coachCommentaryService } from '../../services/coachCommentaryService';
 import { EDGE_NEURAL_VOICES } from '../../constants/aiModels';
 import { speak } from '../../utils/voice';
+import { detectApiKeyProvider } from '../../services/coachService';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
 import {
   X,
@@ -13,7 +20,6 @@ import {
   VolumeX,
   Key,
   Palette,
-  Mic,
   Download,
   Upload,
   Check,
@@ -21,8 +27,10 @@ import {
   EyeOff,
   Loader2,
   Sparkles,
+  GraduationCap,
   Activity,
   Bot,
+  Cpu,
 } from 'lucide-react';
 import { engineService, EngineStatusInfo } from '../../services/engineService';
 import { PIECE_SETS, preloadPieceSet } from '../../config/pieceSets';
@@ -45,7 +53,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [showKey, setShowKey] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [isTestingVoice, setIsTestingVoice] = useState(false);
-  const [isTestingMic, setIsTestingMic] = useState(false);
   const [voiceTestStatus, setVoiceTestStatus] = useState<{ type: 'info' | 'success' | 'error'; message: string } | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -136,6 +143,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       updated.geminiVoice = value as string;
     } else if (key === 'geminiVoice') {
       updated.edgeVoice = value as string;
+    } else if (key === 'coachVerbosity') {
+      updated.liveCoachEnabled = value !== 'silent';
+      updated.coachMode =
+        value === 'brief'
+          ? 'criticizing'
+          : value === 'verbose'
+          ? 'learning'
+          : 'learning';
     }
 
     setLocalSettings(updated);
@@ -178,51 +193,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleProviderChange = (provider: AIProviderId) => {
-    let defaultBaseUrl = '';
-    let defaultModel = '';
-    if (provider === 'groq') {
-      defaultBaseUrl = 'https://api.groq.com/openai/v1';
-      defaultModel = 'llama-3.3-70b-versatile';
-    } else if (provider === 'openrouter') {
-      defaultBaseUrl = 'https://openrouter.ai/api/v1';
-      defaultModel = 'anthropic/claude-3.5-sonnet';
-    } else if (provider === 'openai') {
-      defaultBaseUrl = 'https://api.openai.com/v1';
-      defaultModel = 'gpt-4o-mini';
-    } else if (provider === 'bytez') {
-      defaultBaseUrl = 'https://api.bytez.com/v1';
-      defaultModel = 'Qwen/Qwen2.5-72B-Instruct';
-    } else if (provider === 'custom') {
-      defaultBaseUrl = 'https://api.openai.com/v1';
-      defaultModel = 'gpt-3.5-turbo';
-    }
-
-    const updated: AppSettings = {
-      ...localSettings,
-      aiProvider: provider,
-      aiBaseUrl: defaultBaseUrl,
-      aiModelName: defaultModel,
-    };
-    setLocalSettings(updated);
-    storageService.saveSettings(updated);
-    onUpdateSettings(updated);
-    setVoiceTestStatus(null);
-  };
-
   const handleApiKeyChange = (newKey: string) => {
     const trimmed = newKey.trim();
-    const updated: AppSettings =
-      localSettings.aiProvider === 'gemini'
-        ? {
-            ...localSettings,
-            geminiApiKey: trimmed,
-            aiApiKey: trimmed,
-          }
-        : {
-            ...localSettings,
-            aiApiKey: trimmed,
-          };
+    const detected = detectApiKeyProvider(trimmed);
+    const updated: AppSettings = {
+      ...localSettings,
+      aiApiKey: trimmed,
+      geminiApiKey: trimmed,
+      aiProvider:
+        detected.provider === 'none'
+          ? 'gemini'
+          : (detected.provider as AppSettings['aiProvider']),
+    };
     setLocalSettings(updated);
     storageService.saveSettings(updated);
     onUpdateSettings(updated);
@@ -249,7 +231,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const currentVoice = localSettings.edgeVoice || 'en-US-AndrewNeural';
 
       const res = await speak(
-        "Hello! I am your chess coach. Let's find the best move together.",
+        "Hello! I am your chess coach. Let's analyze the board and find the strongest plan.",
         true,
         {
           ttsEngine: currentEngine,
@@ -298,39 +280,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleTestMicrophone = async () => {
-    setIsTestingMic(true);
-    setVoiceTestStatus({
-      type: 'info',
-      message: 'Recording 3 seconds from microphone to test STT...',
-    });
-    try {
-      const res = await speechService.testMicrophone(localSettings.geminiApiKey);
-      if (res.success) {
-        setVoiceTestStatus({
-          type: 'success',
-          message: `Microphone test succeeded! Transcript: "${res.transcript || '(silence)'}"`,
-        });
-      } else {
-        setVoiceTestStatus({
-          type: 'error',
-          message: res.error || 'Microphone test failed.',
-        });
-      }
-    } catch (e: any) {
-      setVoiceTestStatus({
-        type: 'error',
-        message: e?.message || 'Microphone test failed.',
-      });
-    } finally {
-      setIsTestingMic(false);
-    }
-  };
-
   if (!isOpen) return null;
 
   const activeTtsEngine: TTSEngineType =
     localSettings.ttsEngine || (localSettings.useNaturalVoice === false ? 'browser' : 'edge');
+  const activeApiKey = localSettings.aiApiKey || localSettings.geminiApiKey || '';
+  const detectedProvider = detectApiKeyProvider(activeApiKey);
 
   return (
     <div
@@ -345,7 +300,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-slate-800 shrink-0">
           <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
-            <span>Settings & Preferences</span>
+            <GraduationCap className="w-5 h-5 text-amber-400" />
+            <span>Coach Voice & App Settings</span>
           </h2>
           <button
             onClick={onClose}
@@ -356,9 +312,268 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Scrollable Content */}
-        <div className="p-4 space-y-6 overflow-y-auto flex-1 text-slate-200 text-sm">
-          {/* Board & Piece Theme Section */}
+        <div className="p-4 space-y-5 overflow-y-auto flex-1 text-slate-200 text-sm">
+          {/* Coach Voice & AI Settings Section (Clean Dropdowns) */}
           <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+                {localSettings.voiceEnabled ? (
+                  <Volume2 className="w-4 h-4" />
+                ) : (
+                  <VolumeX className="w-4 h-4 text-slate-400" />
+                )}
+                <span>Coach Voice Output</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={localSettings.voiceEnabled}
+                onClick={() => handleChange('voiceEnabled', !localSettings.voiceEnabled)}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                  localSettings.voiceEnabled ? 'bg-amber-500' : 'bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition duration-200 ease-in-out ${
+                    localSettings.voiceEnabled ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="space-y-3 bg-slate-950/40 p-3.5 rounded-xl border border-slate-800 text-xs">
+              {/* Coaching Mode (coachVerbosity) Dropdown */}
+              <div className="space-y-1">
+                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Coaching Mode</span>
+                </label>
+                <select
+                  value={localSettings.coachVerbosity || 'detailed'}
+                  onChange={(e) => handleChange('coachVerbosity', e.target.value as CoachVerbosity)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                >
+                  <option value="silent">Silent — No Live Commentary</option>
+                  <option value="brief">Brief — Criticize Mistakes & Blunders Only</option>
+                  <option value="detailed">Detailed — Analyze Every Move, Criticize & Suggest</option>
+                  <option value="verbose">Verbose — Deep Tactical & Positional Breakdown</option>
+                </select>
+              </div>
+
+              {/* Coach Style / Persona (coachPersonality) Dropdown */}
+              <div className="space-y-1">
+                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                  <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Coach Style / Persona</span>
+                </label>
+                <select
+                  value={localSettings.coachPersonality || 'strict'}
+                  onChange={(e) => handleChange('coachPersonality', e.target.value as CoachPersonality)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                >
+                  <option value="strict">Strict Grandmaster — Direct criticism, demands precision</option>
+                  <option value="supportive">Supportive Mentor — Encouraging, constructive guidance</option>
+                  <option value="aggressive">Tactical Attacker — Focuses on initiative, threats & punishment</option>
+                  <option value="professor">Positional Professor — Strategic plans & structure</option>
+                </select>
+              </div>
+
+              {/* Speech Engine (ttsEngine) Dropdown */}
+              <div className="space-y-1">
+                <label className="text-slate-300 font-semibold flex items-center gap-1.5">
+                  <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Speech Engine</span>
+                </label>
+                <select
+                  value={activeTtsEngine}
+                  onChange={(e) => handleChange('ttsEngine', e.target.value as TTSEngineType)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                >
+                  <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
+                  <option value="browser">Standard Device TTS (100% Offline)</option>
+                </select>
+              </div>
+
+              {/* Coach Voice (edgeVoice) Dropdown + Compact Test Button */}
+              {activeTtsEngine === 'edge' && (
+                <div className="space-y-1">
+                  <label className="text-slate-300 font-semibold">Coach Voice</label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={localSettings.edgeVoice || 'en-US-AndrewNeural'}
+                      onChange={(e) => handleChange('edgeVoice', e.target.value)}
+                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                    >
+                      {EDGE_NEURAL_VOICES.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleTestEdgeVoice}
+                      disabled={isTestingVoice}
+                      className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
+                    >
+                      {isTestingVoice ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : isSpeaking ? (
+                        <VolumeX className="w-3.5 h-3.5" />
+                      ) : (
+                        <Volume2 className="w-3.5 h-3.5" />
+                      )}
+                      <span>{isTestingVoice ? '...' : isSpeaking ? 'Stop' : 'Test'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Rate & Volume Sliders */}
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <div className="flex justify-between text-slate-400 mb-1">
+                    <span>Speed</span>
+                    <span>{localSettings.voiceRate}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2.0"
+                    step="0.1"
+                    value={localSettings.voiceRate}
+                    onChange={(e) => handleChange('voiceRate', parseFloat(e.target.value))}
+                    className="w-full accent-amber-500 cursor-pointer"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex justify-between text-slate-400 mb-1">
+                    <span>Volume</span>
+                    <span>{Math.round(localSettings.voiceVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1.0"
+                    step="0.1"
+                    value={localSettings.voiceVolume}
+                    onChange={(e) => handleChange('voiceVolume', parseFloat(e.target.value))}
+                    className="w-full accent-amber-500 cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTestCoachSampleMove}
+                  disabled={isTestingSampleMove}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                >
+                  {isTestingSampleMove ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Testing Coach...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Bot className="w-3.5 h-3.5" />
+                      <span>Test coach on sample move</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Sample Move Test Readout */}
+              {sampleMoveResult && (
+                <div className="p-3 rounded-xl bg-slate-900 border border-indigo-500/30 text-xs space-y-1.5">
+                  <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                    <Bot className="w-4 h-4" />
+                    <span>Live Coach Sample Move Test Result:</span>
+                  </div>
+                  {sampleMoveResult.error ? (
+                    <div className="text-rose-400">Error: {sampleMoveResult.error}</div>
+                  ) : (
+                    <>
+                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Engine facts:</span> {sampleMoveResult.engineFacts}</div>
+                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Generated text:</span> "{sampleMoveResult.generatedText}"</div>
+                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Time to first audio:</span> {sampleMoveResult.timeToFirstAudioMs} ms</div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Test Result Toast */}
+              {voiceTestStatus && (
+                <div
+                  className={`p-2.5 rounded-lg text-xs flex items-start gap-2 border ${
+                    voiceTestStatus.type === 'error'
+                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                      : voiceTestStatus.type === 'success'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                  }`}
+                >
+                  {voiceTestStatus.type === 'error' ? (
+                    <span className="font-bold">⚠️</span>
+                  ) : voiceTestStatus.type === 'success' ? (
+                    <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <Loader2 className="w-4 h-4 shrink-0 animate-spin text-amber-400 mt-0.5" />
+                  )}
+                  <div className="flex-1 leading-snug">{voiceTestStatus.message}</div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Universal AI API Key Section */}
+          <section className="space-y-3 border-t border-slate-800/80 pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
+                <Key className="w-4 h-4" />
+                <span>Universal AI API Key (Optional)</span>
+              </div>
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
+                  detectedProvider.provider !== 'none'
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}
+              >
+                {detectedProvider.provider !== 'none'
+                  ? `Detected: ${detectedProvider.label}`
+                  : 'Using Built-in Environment Key / Offline Heuristics'}
+              </span>
+            </div>
+
+            <div className="space-y-2 bg-slate-950/40 p-3 rounded-xl border border-slate-800 text-xs">
+              <div className="relative">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={activeApiKey}
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
+                  placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                >
+                  {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 flex items-center gap-1 leading-relaxed">
+                <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Automatically detects Gemini, Groq, OpenAI, Anthropic Claude, OpenRouter, or xAI. Stored locally on your device.</span>
+              </p>
+            </div>
+          </section>
+
+          {/* Board & Piece Theme Section */}
+          <section className="space-y-3 border-t border-slate-800/80 pt-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
               <Palette className="w-4 h-4" />
               <span>Board & Piece Appearance</span>
@@ -433,329 +648,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {localSettings.soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
                 {localSettings.soundEnabled ? 'Enabled' : 'Muted'}
               </button>
-            </div>
-          </section>
-
-          {/* Voice Coach Settings (Edge Neural TTS & Standard Device TTS) */}
-          <section className="space-y-3 border-t border-slate-800/80 pt-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
-                <Mic className="w-4 h-4" />
-                <span>AI Voice Coach (Edge Neural TTS)</span>
-              </div>
-              <input
-                type="checkbox"
-                checked={localSettings.voiceEnabled}
-                onChange={(e) => handleChange('voiceEnabled', e.target.checked)}
-                className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-              />
-            </div>
-
-            {localSettings.voiceEnabled && (
-              <div className="space-y-3 bg-slate-950/40 p-3 rounded-xl border border-slate-800 text-xs">
-                {/* TTS Engine Toggle: Edge Neural vs Standard Device */}
-                <div className="space-y-1.5">
-                  <label className="text-slate-400 font-medium">Coach Voice Engine</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleChange('ttsEngine', 'edge')}
-                      className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                        activeTtsEngine === 'edge'
-                          ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                          : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      <div className="font-semibold">Edge Neural TTS (Natural Coach Voice)</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">Expressive neural coach voices</div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleChange('ttsEngine', 'browser')}
-                      className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                        activeTtsEngine === 'browser'
-                          ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                          : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      <div className="font-semibold">Standard Device TTS (100% Offline)</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">Built-in device speech synthesis</div>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Curated Edge Neural Voice Persona Picker */}
-                {activeTtsEngine === 'edge' && (
-                  <div className="space-y-1">
-                    <label className="text-slate-400 font-medium">Coach Voice Persona</label>
-                    <select
-                      value={localSettings.edgeVoice || 'en-US-AndrewNeural'}
-                      onChange={(e) => handleChange('edgeVoice', e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs focus:outline-hidden focus:border-amber-500"
-                    >
-                      {EDGE_NEURAL_VOICES.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Rate & Volume Sliders */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="flex justify-between text-slate-400 mb-1">
-                      <span>Speed</span>
-                      <span>{localSettings.voiceRate}x</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.5"
-                      max="2.0"
-                      step="0.1"
-                      value={localSettings.voiceRate}
-                      onChange={(e) => handleChange('voiceRate', parseFloat(e.target.value))}
-                      className="w-full accent-amber-500 cursor-pointer"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex justify-between text-slate-400 mb-1">
-                      <span>Volume</span>
-                      <span>{Math.round(localSettings.voiceVolume * 100)}%</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1.0"
-                      step="0.1"
-                      value={localSettings.voiceVolume}
-                      onChange={(e) => handleChange('voiceVolume', parseFloat(e.target.value))}
-                      className="w-full accent-amber-500 cursor-pointer"
-                    />
-                  </div>
-                </div>
-
-                {/* Additional Settings */}
-                <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-300">Reveal better move names</span>
-                    <input
-                      type="checkbox"
-                      checked={localSettings.revealBetterMoveNames ?? true}
-                      onChange={(e) => handleChange('revealBetterMoveNames', e.target.checked)}
-                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-300">Send automatically after transcribing</span>
-                    <input
-                      type="checkbox"
-                      checked={localSettings.autoSendTranscribed ?? false}
-                      onChange={(e) => handleChange('autoSendTranscribed', e.target.checked)}
-                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                    />
-                  </div>
-                </div>
-
-                {/* Voice & Microphone Test Action Buttons */}
-                <div className="pt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleTestEdgeVoice}
-                    disabled={isTestingVoice}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-                  >
-                    {isTestingVoice ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Synthesizing...</span>
-                      </>
-                    ) : isSpeaking ? (
-                      <>
-                        <VolumeX className="w-3.5 h-3.5" />
-                        <span>Stop Voice</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>Test Voice</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleTestMicrophone}
-                    disabled={isTestingMic}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition-colors cursor-pointer"
-                  >
-                    {isTestingMic ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                        <span>Recording 3s...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Mic className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Test Microphone (3s)</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleTestCoachSampleMove}
-                    disabled={isTestingSampleMove}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-                  >
-                    {isTestingSampleMove ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Testing Coach...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Bot className="w-3.5 h-3.5" />
-                        <span>Test coach on sample move</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                {/* Sample Move Test Readout */}
-                {sampleMoveResult && (
-                  <div className="p-3 rounded-xl bg-slate-900 border border-indigo-500/30 text-xs space-y-1.5">
-                    <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
-                      <Bot className="w-4 h-4" />
-                      <span>Live Coach Sample Move Test Result:</span>
-                    </div>
-                    {sampleMoveResult.error ? (
-                      <div className="text-rose-400">Error: {sampleMoveResult.error}</div>
-                    ) : (
-                      <>
-                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Engine facts:</span> {sampleMoveResult.engineFacts}</div>
-                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Generated text:</span> "{sampleMoveResult.generatedText}"</div>
-                        <div className="text-slate-300"><span className="text-slate-400 font-medium">Time to first audio:</span> {sampleMoveResult.timeToFirstAudioMs} ms</div>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {/* Test Result Toast */}
-                {voiceTestStatus && (
-                  <div
-                    className={`p-2.5 rounded-lg text-xs flex items-start gap-2 border ${
-                      voiceTestStatus.type === 'error'
-                        ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-                        : voiceTestStatus.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                        : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
-                    }`}
-                  >
-                    {voiceTestStatus.type === 'error' ? (
-                      <span className="font-bold">⚠️</span>
-                    ) : voiceTestStatus.type === 'success' ? (
-                      <Check className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
-                    ) : (
-                      <Loader2 className="w-4 h-4 shrink-0 animate-spin text-amber-400 mt-0.5" />
-                    )}
-                    <div className="flex-1 leading-snug">{voiceTestStatus.message}</div>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* AI Provider & API Key Section */}
-          <section className="space-y-3 border-t border-slate-800/80 pt-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
-                <Key className="w-4 h-4" />
-                <span>Gemini AI Text Coach Key (Optional)</span>
-              </div>
-            </div>
-
-            <div className="space-y-3 bg-slate-950/40 p-3 rounded-xl border border-slate-800 text-xs">
-              <div className="space-y-1.5">
-                <label className="text-slate-400 font-medium">Provider</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['gemini', 'groq', 'openrouter', 'openai', 'bytez', 'custom'] as AIProviderId[]).map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => handleProviderChange(p)}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold capitalize border transition-all cursor-pointer ${
-                        (localSettings.aiProvider || 'gemini') === p
-                          ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                          : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-800'
-                      }`}
-                    >
-                      {p === 'gemini' ? 'Google Gemini' : p === 'openrouter' ? 'OpenRouter' : p === 'groq' ? 'GroqCloud' : p === 'bytez' ? 'Bytez' : p === 'openai' ? 'OpenAI' : 'Custom'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-400 font-medium">
-                  {localSettings.aiProvider === 'gemini'
-                    ? 'Gemini AI Text Coach Key (Optional)'
-                    : `${localSettings.aiProvider.toUpperCase()} API Key`}
-                </label>
-                <div className="relative">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={localSettings.aiProvider === 'gemini' ? (localSettings.geminiApiKey || localSettings.aiApiKey || '') : (localSettings.aiApiKey || '')}
-                    onChange={(e) => handleApiKeyChange(e.target.value)}
-                    placeholder={
-                      localSettings.aiProvider === 'gemini'
-                        ? 'AIzaSy...'
-                        : localSettings.aiProvider === 'groq'
-                        ? 'gsk_...'
-                        : 'sk-...'
-                    }
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
-                  >
-                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-400 leading-relaxed">
-                  Local credential: Your key is stored solely on your device in your browser's private localStorage for AI text coaching.
-                </p>
-              </div>
-
-              {localSettings.aiProvider !== 'gemini' && (
-                <div className="space-y-2 pt-2 border-t border-slate-800/80">
-                  <div className="space-y-1">
-                    <label className="text-slate-400 font-medium">Base URL</label>
-                    <input
-                      type="text"
-                      value={localSettings.aiBaseUrl || ''}
-                      onChange={(e) => handleChange('aiBaseUrl', e.target.value)}
-                      placeholder="https://api.openai.com/v1"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono text-xs focus:outline-hidden focus:border-amber-500"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-slate-400 font-medium">Model Name</label>
-                    <input
-                      type="text"
-                      value={localSettings.aiModelName || ''}
-                      onChange={(e) => handleChange('aiModelName', e.target.value)}
-                      placeholder="gpt-4o-mini"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono text-xs focus:outline-hidden focus:border-amber-500"
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           </section>
 

@@ -20,8 +20,12 @@ export const DEFAULT_PROGRESS: UserProgress = {
   lastActiveDate: new Date().toISOString().slice(0, 10),
   gamesPlayed: 0,
   gamesWon: 0,
+  voiceEnabled: true,
+  coachVerbosity: 'detailed',
+  coachPersonality: 'strict',
   ttsEngine: 'edge',
   edgeVoice: 'en-US-AndrewNeural',
+  aiApiKey: '',
   geminiApiKey: '',
 };
 
@@ -47,6 +51,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pieceShadow: true,
   liveCoachEnabled: true,
   coachMode: 'learning',
+  coachVerbosity: 'detailed',
+  coachPersonality: 'strict',
   revealBetterMoveNames: true,
   autoSendTranscribed: false,
   streamingVoice: false,
@@ -77,38 +83,48 @@ export const storageService = {
           : 'en-US-AndrewNeural';
         settings.geminiVoice = settings.edgeVoice;
 
-        // Safe migration: preserve saved Gemini keys across settings & progress
-        if (
-          (!settings.geminiApiKey || !settings.geminiApiKey.trim()) &&
-          parsedProgress.geminiApiKey &&
-          typeof parsedProgress.geminiApiKey === 'string' &&
-          parsedProgress.geminiApiKey.trim()
-        ) {
-          settings.geminiApiKey = parsedProgress.geminiApiKey.trim();
-        } else if (
-          (!settings.geminiApiKey || !settings.geminiApiKey.trim()) &&
-          (!settings.aiProvider || settings.aiProvider === 'gemini') &&
-          settings.aiApiKey &&
-          settings.aiApiKey.trim()
-        ) {
-          settings.geminiApiKey = settings.aiApiKey.trim();
-        }
+        // Migrate coachPersonality & coachVerbosity
+        settings.coachPersonality =
+          parsed.coachPersonality || parsedProgress.coachPersonality || 'strict';
+        settings.coachVerbosity =
+          parsed.coachVerbosity ||
+          parsedProgress.coachVerbosity ||
+          (settings.liveCoachEnabled === false ? 'silent' : 'detailed');
+
+        // Migrate geminiApiKey -> aiApiKey
+        const resolvedKey = (
+          parsed.aiApiKey ||
+          parsedProgress.aiApiKey ||
+          parsed.geminiApiKey ||
+          parsedProgress.geminiApiKey ||
+          ''
+        ).trim();
+        settings.aiApiKey = resolvedKey;
+        settings.geminiApiKey = resolvedKey;
 
         return settings;
       } else if (progressData) {
-        // Hydrate settings from progress if only progress was saved
         const migratedTts =
           parsedProgress.ttsEngine === 'browser' ? 'browser' : 'edge';
         const migratedVoice = VALID_EDGE_VOICES.has(parsedProgress.edgeVoice)
           ? parsedProgress.edgeVoice
           : 'en-US-AndrewNeural';
+        const resolvedKey = (
+          parsedProgress.aiApiKey ||
+          parsedProgress.geminiApiKey ||
+          ''
+        ).trim();
         return {
           ...DEFAULT_SETTINGS,
+          voiceEnabled: parsedProgress.voiceEnabled ?? true,
+          coachVerbosity: parsedProgress.coachVerbosity || 'detailed',
+          coachPersonality: parsedProgress.coachPersonality || 'strict',
           ttsEngine: migratedTts,
           useNaturalVoice: migratedTts === 'edge',
           edgeVoice: migratedVoice,
           geminiVoice: migratedVoice,
-          geminiApiKey: (parsedProgress.geminiApiKey || '').trim(),
+          aiApiKey: resolvedKey,
+          geminiApiKey: resolvedKey,
         };
       }
     } catch (e) {
@@ -120,6 +136,7 @@ export const storageService = {
   saveSettings(settings: AppSettings): void {
     if (typeof localStorage === 'undefined') return;
     try {
+      const resolvedKey = (settings.aiApiKey || settings.geminiApiKey || '').trim();
       const normalized: AppSettings = {
         ...settings,
         ttsEngine: settings.ttsEngine || (settings.useNaturalVoice ? 'edge' : 'browser'),
@@ -129,6 +146,10 @@ export const storageService = {
           : VALID_EDGE_VOICES.has(settings.geminiVoice)
           ? settings.geminiVoice
           : 'en-US-AndrewNeural',
+        coachPersonality: settings.coachPersonality || 'strict',
+        coachVerbosity: settings.coachVerbosity || 'detailed',
+        aiApiKey: resolvedKey,
+        geminiApiKey: resolvedKey,
       };
       normalized.geminiVoice = normalized.edgeVoice;
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
@@ -137,9 +158,13 @@ export const storageService = {
       const currentProgress = this.getProgress();
       const syncedProgress: UserProgress = {
         ...currentProgress,
+        voiceEnabled: normalized.voiceEnabled,
+        coachVerbosity: normalized.coachVerbosity,
+        coachPersonality: normalized.coachPersonality,
         ttsEngine: normalized.ttsEngine,
         edgeVoice: normalized.edgeVoice,
-        geminiApiKey: normalized.geminiApiKey || currentProgress.geminiApiKey || '',
+        aiApiKey: resolvedKey,
+        geminiApiKey: resolvedKey,
       };
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(syncedProgress));
     } catch (e) {
@@ -158,6 +183,12 @@ export const storageService = {
       updated.geminiVoice = value as string;
     } else if (key === 'geminiVoice') {
       updated.edgeVoice = value as string;
+    } else if (key === 'aiApiKey') {
+      updated.geminiApiKey = value as string;
+    } else if (key === 'geminiApiKey') {
+      updated.aiApiKey = value as string;
+    } else if (key === 'coachVerbosity') {
+      updated.liveCoachEnabled = value !== 'silent';
     }
     this.saveSettings(updated);
     return updated;
@@ -182,6 +213,19 @@ export const storageService = {
         if (!progress.edgeVoice || !VALID_EDGE_VOICES.has(progress.edgeVoice)) {
           progress.edgeVoice = 'en-US-AndrewNeural';
         }
+        if (!progress.coachPersonality) {
+          progress.coachPersonality = 'strict';
+        }
+        if (!progress.coachVerbosity) {
+          progress.coachVerbosity = 'detailed';
+        }
+        // Migrate geminiApiKey -> aiApiKey
+        if (!progress.aiApiKey && parsed.geminiApiKey) {
+          progress.aiApiKey = parsed.geminiApiKey.trim();
+          needsSave = true;
+        }
+        progress.geminiApiKey = progress.aiApiKey || progress.geminiApiKey || '';
+
         if (needsSave) {
           localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
         }
@@ -196,8 +240,11 @@ export const storageService = {
   saveProgress(progress: UserProgress): void {
     if (typeof localStorage === 'undefined') return;
     try {
+      const resolvedKey = (progress.aiApiKey ?? progress.geminiApiKey ?? '').trim();
       const normalized: UserProgress = {
         ...progress,
+        coachPersonality: progress.coachPersonality || 'strict',
+        coachVerbosity: progress.coachVerbosity || 'detailed',
         ttsEngine:
           (progress.ttsEngine as string) === 'gemini'
             ? 'edge'
@@ -206,6 +253,8 @@ export const storageService = {
           progress.edgeVoice && VALID_EDGE_VOICES.has(progress.edgeVoice)
             ? progress.edgeVoice
             : 'en-US-AndrewNeural',
+        aiApiKey: resolvedKey,
+        geminiApiKey: resolvedKey,
       };
       localStorage.setItem(PROGRESS_KEY, JSON.stringify(normalized));
     } catch (e) {

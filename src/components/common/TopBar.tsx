@@ -1,21 +1,25 @@
 import React from 'react';
-import { Volume2, VolumeX, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { Volume2, VolumeX, Settings as SettingsIcon, Sparkles, GraduationCap } from 'lucide-react';
 import { soundService } from '../../services/audioService';
 import { PWAInstallButton } from './PWAInstallButton';
 import { TTSEngineType } from '../../types/chess';
 
 interface TopBarProps {
   soundEnabled: boolean;
+  voiceEnabled?: boolean;
   ttsEngine?: TTSEngineType;
   onToggleSound: () => void;
+  onToggleVoice?: () => void;
   onOpenSettings: () => void;
   onOpenCoach?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
   soundEnabled,
+  voiceEnabled = true,
   ttsEngine = 'edge',
   onToggleSound,
+  onToggleVoice,
   onOpenSettings,
   onOpenCoach,
 }) => {
@@ -31,8 +35,9 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="text-base font-bold tracking-tight text-slate-100">
               ChessPath
             </span>
-            <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/25">
-              {ttsEngine === 'edge' ? 'Edge Neural' : 'Offline TTS'}
+            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/25">
+              <GraduationCap className="w-3 h-3" />
+              <span>{ttsEngine === 'edge' ? 'Edge Neural' : 'Offline TTS'}</span>
             </span>
           </div>
         </div>
@@ -51,6 +56,17 @@ export const TopBar: React.FC<TopBarProps> = ({
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Coach</span>
+            </button>
+          )}
+
+          {/* Voice Output Toggle if provided */}
+          {onToggleVoice && (
+            <button
+              onClick={onToggleVoice}
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-100 hover:bg-slate-900 transition-colors"
+              title={voiceEnabled ? 'Coach Voice Active (Click to Mute)' : 'Coach Voice Muted (Click to Enable)'}
+            >
+              {voiceEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-500" />}
             </button>
           )}
 

@@ -68,8 +68,10 @@ export interface GameResult {
   reason: GameTermination;
 }
 
-export type AIProviderId = 'gemini' | 'groq' | 'openrouter' | 'openai' | 'bytez' | 'custom';
+export type AIProviderId = 'gemini' | 'groq' | 'openrouter' | 'openai' | 'anthropic' | 'xai' | 'bytez' | 'custom';
 export type TTSEngineType = 'edge' | 'browser';
+export type CoachVerbosity = 'silent' | 'brief' | 'detailed' | 'verbose';
+export type CoachPersonality = 'supportive' | 'strict' | 'aggressive' | 'professor';
 
 export interface AppSettings {
   boardTheme: BoardThemeId;
@@ -93,6 +95,8 @@ export interface AppSettings {
   pieceShadow: boolean;
   liveCoachEnabled: boolean;
   coachMode: CoachMode;
+  coachVerbosity?: CoachVerbosity;
+  coachPersonality?: CoachPersonality;
   revealBetterMoveNames: boolean;
   autoSendTranscribed: boolean;
   streamingVoice: boolean;

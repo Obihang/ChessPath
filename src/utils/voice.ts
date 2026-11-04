@@ -209,6 +209,8 @@ export function findBestBrowserVoiceForPersona(edgeVoiceId: string): {
   };
 }
 
+let isEdgeServerAvailable = true;
+
 /**
  * Fetches synthesized MP3 audio from the local /api/edge-tts proxy endpoint (with 3.5s timeout and ObjectURL caching).
  */
@@ -222,7 +224,11 @@ export async function synthesizeEdgeNeuralAudio(
     return audioCache.get(cacheKey)!;
   }
 
-  if (typeof window === 'undefined' || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+  if (
+    !isEdgeServerAvailable ||
+    typeof window === 'undefined' ||
+    (typeof navigator !== 'undefined' && !navigator.onLine)
+  ) {
     return null;
   }
 
@@ -237,13 +243,10 @@ export async function synthesizeEdgeNeuralAudio(
     });
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      return null;
-    }
-
-    const contentType = response.headers.get('Content-Type') || '';
-    if (!contentType.includes('audio')) {
-      return null;
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('audio')) {
+      if (!contentType.includes('audio')) isEdgeServerAvailable = false;
+      throw new Error('Not audio');
     }
 
     const blob = await response.blob();

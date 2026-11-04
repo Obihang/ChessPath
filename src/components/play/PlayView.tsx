@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Chess } from 'chess.js';
 import {
   AppSettings,
-  CoachMode,
+  CoachPersonality,
+  CoachVerbosity,
   GameResult,
   MoveRecord,
   PieceColor,
@@ -28,7 +29,6 @@ import {
   RotateCcw,
   Undo2,
   Flag,
-  Share2,
   Bot,
   Users,
   Play,
@@ -40,8 +40,8 @@ import {
   Sparkles,
   Loader2,
   Lightbulb,
-  Mic,
-  MicOff,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 
 interface PlayViewProps {
@@ -93,12 +93,23 @@ export const PlayView: React.FC<PlayViewProps> = ({
   });
 
   const handleToggleLiveCoach = () => {
-    const updated = storageService.updateSetting('liveCoachEnabled', !settings.liveCoachEnabled);
+    const nextEnabled = !settings.liveCoachEnabled;
+    let updated = storageService.updateSetting('liveCoachEnabled', nextEnabled);
+    if (!nextEnabled) {
+      updated = storageService.updateSetting('coachVerbosity', 'silent');
+    } else if (updated.coachVerbosity === 'silent') {
+      updated = storageService.updateSetting('coachVerbosity', 'detailed');
+    }
     onUpdateSettings?.(updated);
   };
 
-  const handleCoachModeChange = (newMode: CoachMode) => {
-    const updated = storageService.updateSetting('coachMode', newMode);
+  const handleVerbosityChange = (newVerbosity: CoachVerbosity) => {
+    const updated = storageService.updateSetting('coachVerbosity', newVerbosity);
+    onUpdateSettings?.(updated);
+  };
+
+  const handlePersonalityChange = (newPersonality: CoachPersonality) => {
+    const updated = storageService.updateSetting('coachPersonality', newPersonality);
     onUpdateSettings?.(updated);
   };
 
@@ -113,8 +124,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [activeEngine, setActiveEngine] = useState<'stockfish' | 'minimax'>('stockfish');
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [customArrow, setCustomArrow] = useState<{ from: string; to: string; color?: string } | null>(null);
-  const [isPlayRecording, setIsPlayRecording] = useState(false);
-  const [isPlayTranscribing, setIsPlayTranscribing] = useState(false);
 
   // Pre-generate verdict audio clips & precompute player turns
   useEffect(() => {
@@ -702,7 +711,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
         />
       )}
 
-      {/* Live Coach Controls: On/Off Switch & Mode Selector */}
+      {/* Live Coach Controls: On/Off Switch & Clean Dropdowns */}
       <div className="w-full max-w-[520px] bg-slate-900/80 border border-slate-800 rounded-xl p-2.5 flex flex-col gap-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -731,60 +740,24 @@ export const PlayView: React.FC<PlayViewProps> = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={async () => {
-                speechService.unlock();
-                if (isPlayRecording) {
-                  setIsPlayRecording(false);
-                  setIsPlayTranscribing(true);
-                  try {
-                    const audioBlob = await speechService.stopRecording();
-                    if (audioBlob && audioBlob.size > 0) {
-                      const res = await geminiService.transcribeAudio(
-                        audioBlob,
-                        audioBlob.type,
-                        settings.geminiApiKey || settings.aiApiKey
-                      );
-                      if (res.success && res.transcript) {
-                        setFallbackNotice(`Microphone transcript: "${res.transcript}"`);
-                        if (onOpenCoach) onOpenCoach();
-                      } else if (res.error) {
-                        setFallbackNotice(`STT error: ${res.error}`);
-                      }
-                    }
-                  } catch (e: any) {
-                    console.warn('Play mic error', e);
-                  } finally {
-                    setIsPlayTranscribing(false);
-                    setTimeout(() => setFallbackNotice(null), 5000);
-                  }
-                  return;
+              onClick={() => {
+                const updated = storageService.updateSetting('voiceEnabled', !settings.voiceEnabled);
+                if (!updated.voiceEnabled) {
+                  speechService.stop('Voice muted from PlayView');
                 }
-
-                try {
-                  await speechService.startRecording(30000);
-                  setIsPlayRecording(true);
-                } catch (e: any) {
-                  setIsPlayRecording(false);
-                  setFallbackNotice('Microphone permission blocked or unavailable.');
-                  setTimeout(() => setFallbackNotice(null), 4000);
-                }
+                onUpdateSettings?.(updated);
               }}
-              disabled={isPlayTranscribing}
               className={`p-1.5 rounded-lg border transition-colors ${
-                isPlayRecording
-                  ? 'bg-red-500/20 border-red-500 text-red-400 animate-pulse'
-                  : isPlayTranscribing
-                  ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+                settings.voiceEnabled
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
                   : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
               }`}
-              title={isPlayRecording ? 'Tap to stop recording' : 'Voice Input (Microphone)'}
+              title={settings.voiceEnabled ? 'Coach Voice On (Click to Mute)' : 'Coach Voice Muted (Click to Enable)'}
             >
-              {isPlayTranscribing ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-              ) : isPlayRecording ? (
-                <MicOff className="w-3.5 h-3.5" />
+              {settings.voiceEnabled ? (
+                <Volume2 className="w-3.5 h-3.5" />
               ) : (
-                <Mic className="w-3.5 h-3.5" />
+                <VolumeX className="w-3.5 h-3.5" />
               )}
             </button>
 
@@ -807,34 +780,32 @@ export const PlayView: React.FC<PlayViewProps> = ({
           </div>
         </div>
 
-        {/* Mode Selector (in sync with Coach Drawer) */}
+        {/* Coaching Mode & Persona Dropdowns */}
         {settings.liveCoachEnabled && (
-          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1.5 flex-wrap">
-            <span className="text-[11px] text-slate-400 font-medium">Mode:</span>
-            <div className="grid grid-cols-4 gap-1 flex-1 max-w-sm">
-              {(
-                [
-                  { id: 'learning', label: 'Full Learning' },
-                  { id: 'criticizing', label: 'Criticizing' },
-                  { id: 'simple', label: 'Simple' },
-                  { id: 'competitive', label: 'Competitive' },
-                ] as { id: CoachMode; label: string }[]
-              ).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => handleCoachModeChange(m.id)}
-                  className={`px-1.5 py-1 text-[11px] rounded-md font-medium transition-colors text-center truncate ${
-                    settings.coachMode === m.id
-                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
-                      : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                  title={m.label}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
+          <div className="pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <select
+              value={settings.coachVerbosity || 'detailed'}
+              onChange={(e) => handleVerbosityChange(e.target.value as CoachVerbosity)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-hidden focus:border-amber-500"
+              title="Coaching Mode"
+            >
+              <option value="silent">Silent — No Live Commentary</option>
+              <option value="brief">Brief — Mistakes & Blunders Only</option>
+              <option value="detailed">Detailed — Analyze & Suggest</option>
+              <option value="verbose">Verbose — Deep Tactical Breakdown</option>
+            </select>
+
+            <select
+              value={settings.coachPersonality || 'strict'}
+              onChange={(e) => handlePersonalityChange(e.target.value as CoachPersonality)}
+              className="bg-slate-800 border border-slate-700 text-slate-200 text-[11px] rounded-lg px-2.5 py-1.5 focus:outline-hidden focus:border-amber-500"
+              title="Coach Style / Persona"
+            >
+              <option value="strict">Strict Grandmaster</option>
+              <option value="supportive">Supportive Mentor</option>
+              <option value="aggressive">Tactical Attacker</option>
+              <option value="professor">Positional Professor</option>
+            </select>
           </div>
         )}
       </div>

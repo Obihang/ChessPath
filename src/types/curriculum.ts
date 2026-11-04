@@ -109,7 +109,11 @@ export interface UserProgress {
   lastActiveDate: string;
   gamesPlayed: number;
   gamesWon: number;
+  voiceEnabled?: boolean;
+  coachVerbosity?: 'silent' | 'brief' | 'detailed' | 'verbose';
+  coachPersonality?: 'supportive' | 'strict' | 'aggressive' | 'professor';
   ttsEngine?: TTSEngineType;
   edgeVoice?: string;
+  aiApiKey?: string;
   geminiApiKey?: string;
 }

@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { storageService, PROGRESS_KEY } from './storageService';
 import { GEMINI_MODELS } from '../constants/aiModels';
 import { base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
+import { detectApiKeyProvider, callSmartAI, getResolvedAiApiKey } from './coachService';
 
 export { base64ToArrayBuffer };
 
@@ -11,7 +12,7 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
 }
 
 /**
- * Resolves the Gemini API key by checking user's saved `geminiApiKey` in localStorage
+ * Resolves the Gemini API key by checking user's saved `aiApiKey` / `geminiApiKey` in localStorage
  * (`chesspath_progress_v1` first, then `chesspath_settings_v1`), falling back to `process.env.GEMINI_API_KEY`.
  */
 export function getGeminiVoiceApiKey(customKey?: string): string {
@@ -21,8 +22,9 @@ export function getGeminiVoiceApiKey(customKey?: string): string {
       const raw = localStorage.getItem(PROGRESS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.geminiApiKey === 'string') {
-          progressKey = parsed.geminiApiKey.trim();
+        const k = parsed?.aiApiKey || parsed?.geminiApiKey;
+        if (k && typeof k === 'string') {
+          progressKey = k.trim();
         }
       }
     } catch {
@@ -39,8 +41,8 @@ export function getGeminiVoiceApiKey(customKey?: string): string {
   const rawKey = (
     customKey ||
     progressKey ||
+    settings.aiApiKey ||
     settings.geminiApiKey ||
-    (settings.aiProvider === 'gemini' ? settings.aiApiKey : '') ||
     envKey ||
     ''
   ).trim();
@@ -52,13 +54,7 @@ export function getGeminiVoiceApiKey(customKey?: string): string {
  * Resolves the client-side API key for the currently configured text AI provider.
  */
 export function getTextProviderApiKey(customKey?: string): string {
-  const settings = storageService.getSettings();
-  const provider = settings.aiProvider || 'gemini';
-  if (provider === 'gemini') {
-    return getGeminiVoiceApiKey(customKey);
-  }
-  const rawKey = (customKey || settings.aiApiKey || '').trim();
-  return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
+  return getResolvedAiApiKey(customKey);
 }
 
 export function getActiveApiKey(customKey?: string): string {
@@ -185,12 +181,7 @@ async function callOpenAICompatible(
 
 export const geminiService = {
   hasKey(): boolean {
-    const settings = storageService.getSettings();
-    const provider = settings.aiProvider || 'gemini';
-    if (provider === 'gemini') {
-      return !!getGeminiVoiceApiKey();
-    }
-    return !!getTextProviderApiKey();
+    return detectApiKeyProvider().provider !== 'none';
   },
 
   hasGeminiVoiceKey(): boolean {
@@ -198,11 +189,10 @@ export const geminiService = {
   },
 
   hasTextProviderKey(): boolean {
-    return !!getTextProviderApiKey();
+    return detectApiKeyProvider().provider !== 'none';
   },
 
   async explainPosition(fen: string, moveHistory: string[] = []): Promise<string> {
-    const settings = storageService.getSettings();
     if (!this.hasKey()) {
       return 'To get personalized AI position breakdowns and strategic plans, configure your AI API key in Settings. All other app features remain fully functional offline!';
     }
@@ -217,34 +207,15 @@ Please cover:
 3. The main threats to watch out for
 Keep your answer concise (2-3 short paragraphs), warm, encouraging, and clear without overwhelming engine notation.`;
 
-    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
-      try {
-        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are an expert chess mentor.');
-      } catch (e: any) {
-        return `AI Coach response error: ${e?.message || 'Check your API key in Settings.'}`;
-      }
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return 'To get personalized AI position breakdowns, configure your API key in Settings.';
-    }
-
     try {
-      const response = await ai.models.generateContent({
-        model: rememberedTextModel,
-        contents: prompt,
-      });
-
-      return response.text || 'Unable to analyze the position at this moment.';
+      const reply = await callSmartAI(prompt, 'You are an expert chess mentor.');
+      return reply || 'Unable to analyze the position at this moment.';
     } catch (e: any) {
-      console.warn('Gemini explainPosition error', e);
       return `AI Coach response: ${e?.message || 'Check your internet connection or API key in Settings.'}`;
     }
   },
 
   async getHint(fen: string, goal: string = 'find the best move', playerColor: string = 'White'): Promise<string> {
-    const settings = storageService.getSettings();
     if (!this.hasKey()) {
       return 'Look for undefended pieces, potential knight forks, or checks that force the opponent’s king to move.';
     }
@@ -256,33 +227,15 @@ Side to move: "${playerColor}"
 
 Provide a gentle nudge (1-2 sentences) pointing to the relevant sector of the board or tactical motif, WITHOUT explicitly spelling out the exact move coordinates. Be encouraging!`;
 
-    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
-      try {
-        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are a helpful chess coach.');
-      } catch {
-        return 'Focus on piece activity: look for forcing moves, checks, and double attacks.';
-      }
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return 'Look for undefended pieces, potential knight forks, or checks that force the opponent’s king to move.';
-    }
-
     try {
-      const response = await ai.models.generateContent({
-        model: rememberedTextModel,
-        contents: prompt,
-      });
-
-      return response.text || 'Look for checks, captures, and threats on your opponent’s undefended pieces.';
+      const reply = await callSmartAI(prompt, 'You are a helpful chess coach.');
+      return reply || 'Look for checks, captures, and threats on your opponent’s undefended pieces.';
     } catch {
       return 'Focus on piece activity: look for forcing moves, checks, and double attacks.';
     }
   },
 
   async analyzeGame(moves: string[], result: string): Promise<string> {
-    const settings = storageService.getSettings();
     if (!this.hasKey()) {
       return 'Game completed! Configure your AI API key in Settings to receive grandmaster post-game reports and lessons to learn.';
     }
@@ -296,26 +249,9 @@ Write a human-friendly review with:
 2. Exactly 2-3 key strategic lessons the student should take away to improve their play
 Keep the tone encouraging, constructive, and inspiring!`;
 
-    if (settings.aiProvider && settings.aiProvider !== 'gemini') {
-      try {
-        return await callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], 'You are a grandmaster chess mentor.');
-      } catch {
-        return 'Well played! Review your moves and look for missed opportunities to control the center.';
-      }
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      return 'Game completed! Configure your API key in Settings to receive grandmaster post-game reports.';
-    }
-
     try {
-      const response = await ai.models.generateContent({
-        model: rememberedTextModel,
-        contents: prompt,
-      });
-
-      return response.text || 'Great game! Consistent calculation and king safety are the pillars of improvement.';
+      const reply = await callSmartAI(prompt, 'You are a grandmaster chess mentor.');
+      return reply || 'Great game! Consistent calculation and king safety are the pillars of improvement.';
     } catch {
       return 'Well played! Review your moves and look for missed opportunities to control the center.';
     }
@@ -325,46 +261,20 @@ Keep the tone encouraging, constructive, and inspiring!`;
     messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
     systemInstruction: string
   ): Promise<string> {
-    const settings = storageService.getSettings();
-    const provider = settings.aiProvider || 'gemini';
-
-    if (!getActiveApiKey()) {
+    const detected = detectApiKeyProvider();
+    if (detected.provider === 'none') {
       throw new Error('NO_KEY');
     }
 
-    if (provider !== 'gemini') {
-      return callOpenAICompatible(messages, systemInstruction);
-    }
+    const transcript = messages
+      .map((m) => {
+        const speaker = m.role === 'user' ? 'Student' : 'Coach';
+        const text = m.parts ? m.parts.map((p) => p.text).join('\n') : (m as any).content || '';
+        return `${speaker}: ${text}`;
+      })
+      .join('\n\n');
 
-    const ai = getGeminiClient();
-    if (!ai) {
-      throw new Error('NO_KEY');
-    }
-
-    try {
-      const response = await ai.models.generateContent({
-        model: rememberedTextModel,
-        contents: messages,
-        config: { systemInstruction },
-      });
-      return response.text || 'No response from AI.';
-    } catch (e: any) {
-      const msg = e?.message || '';
-      if (
-        rememberedTextModel === DEFAULT_TEXT_MODEL &&
-        (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound'))
-      ) {
-        console.warn(`Model ${DEFAULT_TEXT_MODEL} not found, retrying with ${FALLBACK_TEXT_MODEL}...`);
-        rememberedTextModel = FALLBACK_TEXT_MODEL;
-        const fallbackRes = await ai.models.generateContent({
-          model: rememberedTextModel,
-          contents: messages,
-          config: { systemInstruction },
-        });
-        return fallbackRes.text || 'No response from AI.';
-      }
-      throw e;
-    }
+    return await callSmartAI(transcript, systemInstruction);
   },
 
   async generateLiveCommentary(
@@ -372,50 +282,12 @@ Keep the tone encouraging, constructive, and inspiring!`;
     systemInstruction: string,
     _maxSentences: number = 2
   ): Promise<string> {
-    const settings = storageService.getSettings();
-    const provider = settings.aiProvider || 'gemini';
-
-    if (!getActiveApiKey()) {
+    const detected = detectApiKeyProvider();
+    if (detected.provider === 'none') {
       throw new Error('NO_KEY');
     }
 
-    if (provider !== 'gemini') {
-      return callOpenAICompatible([{ role: 'user', parts: [{ text: prompt }] }], systemInstruction);
-    }
-
-    const ai = getGeminiClient();
-    if (!ai) {
-      throw new Error('NO_KEY');
-    }
-
-    try {
-      const response = await ai.models.generateContent({
-        model: rememberedTextModel,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          systemInstruction,
-        },
-      });
-      return response.text || '';
-    } catch (e: any) {
-      const msg = e?.message || '';
-      if (
-        rememberedTextModel === DEFAULT_TEXT_MODEL &&
-        (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound'))
-      ) {
-        console.warn(`Model ${DEFAULT_TEXT_MODEL} not found, retrying live commentary with ${FALLBACK_TEXT_MODEL}...`);
-        rememberedTextModel = FALLBACK_TEXT_MODEL;
-        const fallbackRes = await ai.models.generateContent({
-          model: rememberedTextModel,
-          contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: {
-            systemInstruction,
-          },
-        });
-        return fallbackRes.text || '';
-      }
-      throw e;
-    }
+    return await callSmartAI(prompt, systemInstruction);
   },
 
   async transcribeAudio(

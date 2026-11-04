@@ -302,9 +302,11 @@ function edgeTtsServerPlugin(): Plugin {
   };
 }
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
   const isAndroid = process.env.VITE_TARGET === 'android';
-  const basePath = isAndroid ? './' : (process.env.VITE_BASE_PATH || '/ChessPath/');
+  const basePath = isAndroid
+    ? './'
+    : process.env.VITE_BASE_PATH || (command === 'serve' ? '/' : '/ChessPath/');
 
   return {
     base: basePath,
@@ -369,8 +371,15 @@ export default defineConfig(() => {
       },
     },
     server: {
+      port: 3000,
+      host: '0.0.0.0',
       hmr: process.env.DISABLE_HMR !== 'true',
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      watch:
+        process.env.DISABLE_HMR === 'true'
+          ? null
+          : {
+              ignored: ['**/android/**', '**/dist/**'],
+            },
     },
   };
 });

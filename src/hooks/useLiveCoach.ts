@@ -1,6 +1,13 @@
 import { useState, useRef, useCallback } from 'react';
-import { AppSettings, MoveRecord, PieceColor } from '../types/chess';
-import { coachCommentaryService, MoveFacts, CommentaryResult, recordMoveTiming } from '../services/coachCommentaryService';
+import { AppSettings, CoachPersonality, CoachVerbosity, MoveRecord, PieceColor } from '../types/chess';
+import {
+  coachCommentaryService,
+  MoveFacts,
+  CommentaryResult,
+  recordMoveTiming,
+} from '../services/coachCommentaryService';
+import { generateCommentary } from '../services/commentaryService';
+import { analyzeMoveWithAI, detectApiKeyProvider } from '../services/coachService';
 import { speechService } from '../services/speechService';
 
 export interface MoveAnalysisRecord {
@@ -28,22 +35,29 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
   const [currentRecord, setCurrentRecord] = useState<MoveAnalysisRecord | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(false);
 
-  // Monotonically increasing request ID for all move requests (player and opponent)
   const requestIdRef = useRef<number>(0);
   const lastPhaseRef = useRef<'opening' | 'middlegame' | 'endgame'>('opening');
+
+  const verbosity: CoachVerbosity =
+    settings.coachVerbosity || (settings.liveCoachEnabled === false ? 'silent' : 'detailed');
+  const personality: CoachPersonality = settings.coachPersonality || 'strict';
 
   /**
    * Trigger pre-computation of Stockfish engine facts while player is thinking
    */
-  const precomputeTurn = useCallback((currentFen: string) => {
-    if (settings.liveCoachEnabled) {
-      coachCommentaryService.precomputePlayerTurn(currentFen).catch(() => {});
-    }
-  }, [settings.liveCoachEnabled]);
+  const precomputeTurn = useCallback(
+    (currentFen: string) => {
+      if (settings.liveCoachEnabled && verbosity !== 'silent') {
+        coachCommentaryService.precomputePlayerTurn(currentFen).catch(() => {});
+      }
+    },
+    [settings.liveCoachEnabled, verbosity]
+  );
 
   /**
    * Process a live move executed during gameplay.
-   * Atomically tracks move state and invalidates any stale asynchronous results.
+   * Uses local heuristic commentary (`generateCommentary`) and upgrades with `analyzeMoveWithAI`
+   * (with a 3.5s timeout fallback) when a universal AI key is configured.
    */
   const processMove = useCallback(
     async (
@@ -51,9 +65,9 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       previousFen: string,
       currentFen: string,
       isPlayerMove: boolean,
-      recentMovesSan: string[] = []
+      _recentMovesSan: string[] = []
     ) => {
-      if (!settings.liveCoachEnabled) {
+      if (!settings.liveCoachEnabled || verbosity === 'silent') {
         return;
       }
 
@@ -67,7 +81,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       // Stop previous speech smoothly when a new move occurs
       speechService.stop('New move executed');
 
-      // 1. Immediately clear previous move's commentary and mark new request as analyzing
       const initialRecord: MoveAnalysisRecord = {
         requestId: currentRequestId,
         moveSan: move.san,
@@ -84,7 +97,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       setCurrentRecord(initialRecord);
 
       try {
-        // 2. Engine calculation (uses precomputed evaluation if present: ~0 to 250 ms)
+        // 1. Engine calculation
         const facts = await coachCommentaryService.computeMoveFacts(
           previousFen,
           currentFen,
@@ -96,12 +109,79 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         const engineMs = Date.now() - moveStartTime;
         lastPhaseRef.current = facts.gamePhase;
 
-        // Reject stale results if a newer move occurred during engine calculation
         if (currentRequestId !== requestIdRef.current) {
           return;
         }
 
-        // 3. Update record with engine facts and transition to generating explanation
+        // 2. Compute local heuristic commentary with personality and verbosity
+        // Convert mover-perspective evalBefore/evalAfter back to White-perspective centipawns for generateCommentary
+        const whiteEvalBefore =
+          facts.evalBefore !== null
+            ? facts.moverColor === 'w'
+              ? facts.evalBefore
+              : -facts.evalBefore
+            : 0;
+        const whiteEvalAfter =
+          facts.evalAfter !== null
+            ? facts.moverColor === 'w'
+              ? facts.evalAfter
+              : -facts.evalAfter
+            : 0;
+
+        const localCommentary = generateCommentary(
+          currentFen,
+          previousFen,
+          move.san,
+          whiteEvalAfter,
+          whiteEvalBefore,
+          facts.bestMoveUci,
+          verbosity,
+          personality
+        );
+
+        const effectiveClassification =
+          facts.classification !== 'unavailable'
+            ? facts.classification
+            : localCommentary.classification;
+
+        // Check if this move warrants commentary based on verbosity & player/opponent turn
+        const isCriticalOrTactical =
+          effectiveClassification === 'inaccuracy' ||
+          effectiveClassification === 'mistake' ||
+          effectiveClassification === 'blunder' ||
+          localCommentary.classification === 'brilliant' ||
+          facts.isSacrifice ||
+          facts.isCheck ||
+          move.san.includes('+') ||
+          move.san.includes('#');
+
+        if (isPlayerMove) {
+          if (verbosity === 'brief' && !isCriticalOrTactical) {
+            setCurrentRecord((prev) => {
+              if (!prev || prev.requestId !== currentRequestId) return prev;
+              return {
+                ...prev,
+                facts,
+                status: 'complete',
+              };
+            });
+            return;
+          }
+        } else {
+          // Opponent moves only comment on major swings/checks/blunders
+          if (!coachCommentaryService.shouldModeComment(settings.coachMode, facts, false)) {
+            setCurrentRecord((prev) => {
+              if (!prev || prev.requestId !== currentRequestId) return prev;
+              return {
+                ...prev,
+                facts,
+                status: 'complete',
+              };
+            });
+            return;
+          }
+        }
+
         setCurrentRecord((prev) => {
           if (!prev || prev.requestId !== currentRequestId) return prev;
           return {
@@ -111,60 +191,79 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           };
         });
 
-        // 4. Instant Spoken Verdict from IndexedDB cache (0 network delay)
-        if (settings.voiceEnabled && !isMuted && isPlayerMove && facts.classification !== 'unavailable') {
-          speechService.speakVerdictInstant(facts.classification, settings).catch(() => {});
-        }
-
-        // Check if this mode should generate commentary (opponent moves silence check)
-        if (!isPlayerMove && !coachCommentaryService.shouldModeComment(
-          settings.coachMode,
-          facts,
-          isPlayerMove
-        )) {
-          setCurrentRecord((prev) => {
-            if (!prev || prev.requestId !== currentRequestId) return prev;
-            return {
-              ...prev,
-              status: 'complete',
-            };
-          });
-          return;
-        }
-
-        // 5. Generate AI Teaching Commentary
+        // 3. Determine final commentary text (Smart AI with 3.5s timeout fallback to local heuristic)
         const textGenStart = Date.now();
-        const commentaryResult = await coachCommentaryService.generateCommentary(
-          facts,
-          recentMovesSan,
-          settings.coachMode,
-          isPlayerMove
-        );
+        let finalComment = localCommentary.text;
+        let usedSource: 'gemini' | 'template' = 'template';
+
+        const detectedProvider = detectApiKeyProvider(settings.aiApiKey || settings.geminiApiKey);
+        const warrantsAiCall =
+          detectedProvider.provider !== 'none' &&
+          isPlayerMove &&
+          (verbosity === 'detailed' || verbosity === 'verbose' || isCriticalOrTactical);
+
+        if (warrantsAiCall) {
+          try {
+            const aiPromise = analyzeMoveWithAI({
+              fen: currentFen,
+              prevFen: previousFen,
+              moveSan: move.san,
+              classification: effectiveClassification,
+              evalDrop: localCommentary.evalDrop,
+              bestMoveSan: facts.bestMoveSan || localCommentary.bestMoveSan,
+              tacticalReasons: localCommentary.tacticalReasons,
+              verbosity,
+              personality,
+            });
+
+            const timeoutPromise = new Promise<string>((_, reject) =>
+              setTimeout(() => reject(new Error('AI timeout')), 3500)
+            );
+
+            const aiText = await Promise.race([aiPromise, timeoutPromise]);
+            if (aiText && aiText.trim()) {
+              finalComment = aiText.trim();
+              usedSource = 'gemini';
+            }
+          } catch {
+            // Seamlessly fall back to localCommentary.text
+            finalComment = localCommentary.text;
+          }
+        }
+
         const textGenMs = Date.now() - textGenStart;
 
-        // Reject stale result if a newer move occurred during text generation
         if (currentRequestId !== requestIdRef.current) {
           return;
         }
 
-        if (commentaryResult && commentaryResult.comment) {
+        if (finalComment) {
+          const commentaryResult: CommentaryResult = {
+            id: `${previousFen}_${facts.moveUci}_${currentFen}_${verbosity}_${personality}`,
+            comment: finalComment,
+            facts,
+            mode: settings.coachMode,
+            source: usedSource,
+            timestamp: new Date(),
+          };
+
           setCurrentRecord((prev) => {
             if (!prev || prev.requestId !== currentRequestId) return prev;
             return {
               ...prev,
-              comment: commentaryResult.comment,
-              facts: commentaryResult.facts,
+              comment: finalComment,
+              facts,
               status: 'complete',
-              isRateLimited: commentaryResult.isRateLimited,
             };
           });
 
+          coachCommentaryService.notifyListeners(commentaryResult);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 6. Universal Speech Dispatcher
+          // 4. Speak result via Edge Neural TTS / Browser TTS
           let firstAudioMs = 0;
           if (settings.voiceEnabled && !isMuted) {
-            const speechRes = await speechService.speakWithCoach(commentaryResult.comment, settings, {
+            const speechRes = await speechService.speakWithCoach(finalComment, settings, {
               onFirstAudio: (timeToFirst) => {
                 firstAudioMs = timeToFirst;
               },
@@ -194,7 +293,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
       } catch (err: any) {
         console.warn('useLiveCoach processMove error:', err);
         speechService.logDiagnostic('error', `Live coach move processing error: ${err?.message || err}`);
-        
+
         if (currentRequestId === requestIdRef.current) {
           setCurrentRecord((prev) => {
             if (!prev || prev.requestId !== currentRequestId) return prev;
@@ -207,7 +306,13 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         }
       }
     },
-    [settings.liveCoachEnabled, settings.coachMode, settings.voiceEnabled, settings, isMuted, onCommentaryGenerated]
+    [
+      settings,
+      verbosity,
+      personality,
+      isMuted,
+      onCommentaryGenerated,
+    ]
   );
 
   const toggleMute = useCallback(() => {
@@ -238,27 +343,31 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
     lastPhaseRef.current = 'opening';
   }, []);
 
-  const setHintComment = useCallback((hintText: string) => {
-    requestIdRef.current++;
-    setCurrentRecord({
-      requestId: requestIdRef.current,
-      moveSan: 'Pre-move Hint',
-      moveUci: '',
-      previousFen: '',
-      currentFen: '',
-      moverColor: playerColor,
-      isPlayerMove: true,
-      facts: null,
-      comment: hintText,
-      status: 'complete',
-      error: null,
-    });
-  }, [playerColor]);
+  const setHintComment = useCallback(
+    (hintText: string) => {
+      requestIdRef.current++;
+      setCurrentRecord({
+        requestId: requestIdRef.current,
+        moveSan: 'Pre-move Hint',
+        moveUci: '',
+        previousFen: '',
+        currentFen: '',
+        moverColor: playerColor,
+        isPlayerMove: true,
+        facts: null,
+        comment: hintText,
+        status: 'complete',
+        error: null,
+      });
+    },
+    [playerColor]
+  );
 
-  // Backwards compatible derived properties
   const latestComment = currentRecord?.comment ?? null;
   const commentFacts = currentRecord?.facts ?? null;
-  const isAnalyzing = currentRecord?.status === 'analyzing_engine' || currentRecord?.status === 'generating_explanation';
+  const isAnalyzing =
+    currentRecord?.status === 'analyzing_engine' ||
+    currentRecord?.status === 'generating_explanation';
   const coachError = currentRecord?.error ?? null;
 
   return {
