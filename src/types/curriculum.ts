@@ -113,7 +113,9 @@ export interface UserProgress {
   coachVerbosity?: 'silent' | 'brief' | 'detailed' | 'verbose';
   coachPersonality?: 'supportive' | 'strict' | 'aggressive' | 'professor';
   ttsEngine?: TTSEngineType;
+  geminiVoice?: string;
   edgeVoice?: string;
+  voiceProxyUrl?: string;
   aiApiKey?: string;
   geminiApiKey?: string;
 }

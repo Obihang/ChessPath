@@ -1,6 +1,12 @@
+import { GoogleGenAI } from '@google/genai';
 import { storageService, PROGRESS_KEY } from './storageService';
-import { GEMINI_MODELS } from '../constants/aiModels';
-import { base64ToArrayBuffer, stripMarkdown } from '../utils/audioUtils';
+import { GEMINI_MODELS, GEMINI_PREBUILT_VOICES } from '../constants/aiModels';
+import {
+  base64ToArrayBuffer,
+  stripMarkdown,
+  processRawPcmOrWavToProcessedWav,
+} from '../utils/audioUtils';
+import { audioCacheService } from './audioCacheService';
 import { detectApiKeyProvider, callSmartAI, getResolvedAiApiKey } from './coachService';
 
 export { base64ToArrayBuffer };
@@ -11,8 +17,8 @@ export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'au
 }
 
 /**
- * Resolves any optional custom key from localStorage (`chesspath_progress_v1` first, then `chesspath_settings_v1`).
- * Server-side Gemini endpoints use `process.env.GEMINI_API_KEY` on the server automatically.
+ * Resolves the user's Gemini API key strictly from localStorage (`chesspath_progress_v1` first, then `chesspath_settings_v1`).
+ * Never reads process.env.
  */
 export function getGeminiVoiceApiKey(customKey?: string): string {
   let progressKey = '';
@@ -43,9 +49,6 @@ export function getGeminiVoiceApiKey(customKey?: string): string {
   return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
 }
 
-/**
- * Resolves the client-side API key for the currently configured text AI provider.
- */
 export function getTextProviderApiKey(customKey?: string): string {
   return getResolvedAiApiKey(customKey);
 }
@@ -66,96 +69,13 @@ export function resetActiveTextModel(): void {
   rememberedTextModel = DEFAULT_TEXT_MODEL;
 }
 
-async function callOpenAICompatible(
-  messages: { role: 'user' | 'model'; parts: { text: string }[] }[],
-  systemInstruction?: string
-): Promise<string> {
-  const settings = storageService.getSettings();
-  const provider = settings.aiProvider || 'gemini';
-  const apiKey = getTextProviderApiKey();
-  if (!apiKey) {
-    throw new Error('NO_KEY');
+const VALID_GEMINI_VOICE_NAMES = new Set(GEMINI_PREBUILT_VOICES.map((v) => v.id));
+
+export function normalizeGeminiVoiceName(voiceName?: string): string {
+  if (voiceName && VALID_GEMINI_VOICE_NAMES.has(voiceName)) {
+    return voiceName;
   }
-
-  let baseUrl = '';
-  let defaultModel = '';
-
-  switch (provider) {
-    case 'openrouter':
-      baseUrl = settings.aiBaseUrl || 'https://openrouter.ai/api/v1';
-      defaultModel = settings.aiModelName || 'anthropic/claude-3.5-sonnet';
-      break;
-    case 'groq':
-      baseUrl = settings.aiBaseUrl || 'https://api.groq.com/openai/v1';
-      defaultModel = settings.aiModelName || 'llama-3.3-70b-versatile';
-      break;
-    case 'openai':
-      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
-      defaultModel = settings.aiModelName || 'gpt-4o-mini';
-      break;
-    case 'bytez':
-      baseUrl = settings.aiBaseUrl || 'https://api.bytez.com/v1';
-      defaultModel = settings.aiModelName || 'Qwen/Qwen2.5-72B-Instruct';
-      break;
-    case 'custom':
-    default:
-      baseUrl = settings.aiBaseUrl || 'https://api.openai.com/v1';
-      defaultModel = settings.aiModelName || 'gpt-3.5-turbo';
-      break;
-  }
-
-  const formattedMessages: any[] = [];
-  if (systemInstruction) {
-    formattedMessages.push({ role: 'system', content: systemInstruction });
-  }
-  for (const m of messages) {
-    const text = m.parts ? m.parts.map((p) => p.text).join('\n') : (m as any).content;
-    const role = m.role === 'model' ? 'assistant' : m.role;
-    formattedMessages.push({ role, content: text });
-  }
-
-  let endpoint = baseUrl.trim().replace(/\/+$/, '');
-  if (!endpoint.endsWith('/chat/completions')) {
-    endpoint = `${endpoint}/chat/completions`;
-  }
-
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      ...(provider === 'bytez' ? { 'bytez-api-key': apiKey } : {}),
-      ...(provider === 'openrouter'
-        ? {
-            'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://chesspath.app',
-            'X-Title': 'ChessPath AI',
-          }
-        : {}),
-    },
-    body: JSON.stringify({
-      model: defaultModel,
-      messages: formattedMessages,
-      temperature: 0.7,
-      max_tokens: 500,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    if (res.status === 401 || res.status === 403) {
-      throw new Error(`Invalid API Key for ${provider} (401/403)`);
-    }
-    if (res.status === 429) {
-      throw new Error(`429 Rate limit exceeded on ${provider}`);
-    }
-    if (res.status === 404) {
-      throw new Error(`404 Model or Endpoint not found (${defaultModel}). Check base URL and model.`);
-    }
-    throw new Error(`API Error ${res.status}: ${errText.slice(0, 160)}`);
-  }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || 'No response from API.';
+  return 'Kore';
 }
 
 export const geminiService = {
@@ -163,8 +83,9 @@ export const geminiService = {
     return detectApiKeyProvider().provider !== 'none';
   },
 
-  hasGeminiVoiceKey(): boolean {
-    return true;
+  hasGeminiVoiceKey(customKey?: string): boolean {
+    const key = getGeminiVoiceApiKey(customKey);
+    return Boolean(key && key.startsWith('AIza'));
   },
 
   hasTextProviderKey(): boolean {
@@ -245,6 +166,45 @@ Keep the tone encouraging, constructive, and inspiring!`;
       throw new Error('NO_KEY');
     }
 
+    if (detected.provider === 'gemini') {
+      const apiKey = getResolvedAiApiKey();
+      if (!apiKey) throw new Error('NO_KEY');
+      const ai = new GoogleGenAI({ apiKey });
+
+      const contents = messages.map((m) => ({
+        role: m.role === 'model' ? 'model' : 'user',
+        parts: m.parts?.length ? m.parts : [{ text: (m as any).content || '' }],
+      }));
+
+      const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+      let lastErr: unknown = null;
+
+      for (const model of modelsToTry) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              systemInstruction,
+              temperature: 0.6,
+              maxOutputTokens: 450,
+            },
+          });
+          const text = (response.text || '').trim();
+          if (text) {
+            rememberedTextModel = model;
+            return text;
+          }
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      if (lastErr instanceof Error) {
+        throw lastErr;
+      }
+    }
+
     const transcript = messages
       .map((m) => {
         const speaker = m.role === 'user' ? 'Student' : 'Coach';
@@ -269,11 +229,92 @@ Keep the tone encouraging, constructive, and inspiring!`;
     return await callSmartAI(prompt, systemInstruction);
   },
 
+  /**
+   * Generates speech audio using the official @google/genai Gemini TTS API in the browser,
+   * processes raw 24kHz PCM through the trim/fade pipeline (processRawPcmOrWavToProcessedWav),
+   * and caches the processed WAV buffer in IndexedDB (audioCacheService).
+   */
+  async generateSpeech(
+    text: string,
+    voiceName?: string,
+    customKey?: string
+  ): Promise<{ success: boolean; audioBuffer?: ArrayBuffer; fromCache?: boolean; error?: string }> {
+    const cleanText = stripMarkdown(text).trim();
+    if (!cleanText) {
+      return { success: false, error: 'Empty text provided for TTS.' };
+    }
+
+    const settings = storageService.getSettings();
+    const resolvedVoice = normalizeGeminiVoiceName(voiceName || settings.geminiVoice);
+
+    // 1. Check IndexedDB cache first
+    const cachedBuffer = await audioCacheService.getClip(cleanText, resolvedVoice);
+    if (cachedBuffer && cachedBuffer.byteLength > 44) {
+      return { success: true, audioBuffer: cachedBuffer, fromCache: true };
+    }
+
+    const apiKey = getGeminiVoiceApiKey(customKey);
+    if (!apiKey) {
+      return {
+        success: false,
+        error: 'No Gemini API key configured in Settings. Enter your Gemini key (AIza...) in Settings to enable Gemini TTS.',
+      };
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const ttsModels = [GEMINI_MODELS.TTS_PRIMARY, GEMINI_MODELS.TTS_FALLBACK];
+    let lastError: any = null;
+
+    for (const model of ttsModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [{ parts: [{ text: cleanText }] }],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: resolvedVoice,
+                },
+              },
+            },
+          },
+        });
+
+        const base64Audio =
+          response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          const rawPcmBuffer = base64ToArrayBuffer(base64Audio);
+          const processedWav = processRawPcmOrWavToProcessedWav(rawPcmBuffer, 24000);
+          await audioCacheService.saveClip(cleanText, resolvedVoice, processedWav);
+          return { success: true, audioBuffer: processedWav, fromCache: false };
+        }
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    const errMsg = lastError?.message || 'Gemini TTS failed to synthesize audio.';
+    return { success: false, error: errMsg };
+  },
+
+  /**
+   * Client-side audio transcription using @google/genai and the user's API key from Settings.
+   */
   async transcribeAudio(
     audioBlob: Blob,
     customMimeType?: string,
-    _customKey?: string
+    customKey?: string
   ): Promise<{ success: boolean; transcript?: string; error?: string }> {
+    const apiKey = getGeminiVoiceApiKey(customKey);
+    if (!apiKey) {
+      return {
+        success: false,
+        error: 'NO_KEY: No Gemini API key found in Settings. Add your Gemini API key in Settings to use microphone transcription.',
+      };
+    }
+
     try {
       const arrayBuf = await audioBlob.arrayBuffer();
       const bytes = new Uint8Array(arrayBuf);
@@ -284,21 +325,47 @@ Keep the tone encouraging, constructive, and inspiring!`;
       const base64Data = btoa(binary);
       const mimeType = customMimeType || audioBlob.type || 'audio/webm';
 
-      const response = await fetch('/api/gemini/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          audioBase64: base64Data,
-          mimeType,
-        }),
-      });
+      const ai = new GoogleGenAI({ apiKey });
+      const sttModels = [GEMINI_MODELS.STT_PRIMARY, GEMINI_MODELS.STT_FALLBACK];
+      let transcriptText = '';
+      let lastError: any = null;
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success) {
-        throw new Error(data?.error || `Gemini STT HTTP ${response.status}`);
+      for (const model of sttModels) {
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: base64Data,
+                    },
+                  },
+                  {
+                    text: 'Transcribe this spoken chess question or move command into plain English text. Output only the exact spoken words without quotes or commentary.',
+                  },
+                ],
+              },
+            ],
+          });
+
+          if (response.text && response.text.trim()) {
+            transcriptText = response.text.trim();
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+        }
       }
 
-      const cleanTranscript = stripMarkdown(data.transcript || '').replace(/^["']|["']$/g, '').trim();
+      if (!transcriptText) {
+        throw lastError || new Error('Gemini returned an empty transcription.');
+      }
+
+      const cleanTranscript = stripMarkdown(transcriptText).replace(/^["']|["']$/g, '').trim();
       return { success: true, transcript: cleanTranscript };
     } catch (e: any) {
       console.warn('Gemini STT error:', e);
@@ -322,92 +389,61 @@ Keep the tone encouraging, constructive, and inspiring!`;
   }): Promise<{ success: boolean; reply?: string; error?: string }> {
     const settings = storageService.getSettings();
     const provider = options?.provider || settings.aiProvider || 'gemini';
-    const apiKey = (options?.apiKey || getActiveApiKey()).trim();
-
-    if (provider === 'gemini' || provider === 'auto') {
-      try {
-        const res = await fetch('/api/gemini/test', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data?.success) {
-          return { success: false, error: data?.error || `Gemini HTTP ${res.status}` };
-        }
-        return { success: true, reply: data.reply || 'Connected to Gemini successfully!' };
-      } catch (e: any) {
-        const msg = e?.message || 'Failed to connect to Gemini.';
-        return { success: false, error: msg };
-      }
-    }
+    const apiKey = (options?.apiKey ?? getActiveApiKey()).trim();
 
     if (!apiKey) {
-      return { success: false, error: `No API key provided for ${provider}. Please enter a valid API key.` };
+      return {
+        success: false,
+        error: 'No API key entered in Settings. Please paste your API key first.',
+      };
     }
 
-    let baseUrl = options?.baseUrl || settings.aiBaseUrl || '';
-    let modelName = options?.modelName || settings.aiModelName || '';
+    const detected = detectApiKeyProvider(apiKey, provider);
 
-    if (!baseUrl) {
-      if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1';
-      else if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1';
-      else if (provider === 'bytez') baseUrl = 'https://api.bytez.com/v1';
-      else baseUrl = 'https://api.openai.com/v1';
-    }
+    if (detected.provider === 'gemini') {
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+        let lastErr: any = null;
 
-    if (!modelName) {
-      if (provider === 'groq') modelName = 'llama-3.3-70b-versatile';
-      else if (provider === 'openrouter') modelName = 'anthropic/claude-3.5-sonnet';
-      else if (provider === 'bytez') modelName = 'Qwen/Qwen2.5-72B-Instruct';
-      else if (provider === 'openai') modelName = 'gpt-4o-mini';
-      else modelName = 'gpt-3.5-turbo';
-    }
-
-    let endpoint = baseUrl.trim().replace(/\/+$/, '');
-    if (!endpoint.endsWith('/chat/completions')) {
-      endpoint = `${endpoint}/chat/completions`;
+        for (const model of modelsToTry) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents: 'Say "Chess coach connection verified!" in one short sentence.',
+            });
+            const reply = (response.text || '').trim();
+            if (reply) {
+              return { success: true, reply };
+            }
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        return {
+          success: false,
+          error: lastErr?.message || 'Failed to connect to Gemini.',
+        };
+      } catch (e: any) {
+        return {
+          success: false,
+          error: e?.message || 'Failed to connect to Gemini.',
+        };
+      }
     }
 
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-          ...(provider === 'bytez' ? { 'bytez-api-key': apiKey } : {}),
-          ...(provider === 'openrouter'
-            ? {
-                'HTTP-Referer': typeof window !== 'undefined' ? window.location.origin : 'https://chesspath.app',
-                'X-Title': 'ChessPath AI',
-              }
-            : {}),
-        },
-        body: JSON.stringify({
-          model: modelName,
-          messages: [
-            { role: 'user', content: 'Say "Chess coach connection verified!" in one short sentence.' },
-          ],
-          temperature: 0.7,
-          max_tokens: 60,
-        }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        if (res.status === 401 || res.status === 403) {
-          return { success: false, error: `Invalid API key for ${provider} (HTTP ${res.status}). Please check your key.` };
-        }
-        if (res.status === 404) {
-          return { success: false, error: `Endpoint or model not found (HTTP 404). Check Base URL and Model (${modelName}).` };
-        }
-        return { success: false, error: `API Error (HTTP ${res.status}): ${errText.slice(0, 160)}` };
-      }
-
-      const data = await res.json();
-      const reply = data.choices?.[0]?.message?.content?.trim() || 'Connected successfully!';
-      return { success: true, reply };
+      const reply = await callSmartAI(
+        'Say "Chess coach connection verified!" in one short sentence.',
+        'You are a chess coach.',
+        apiKey
+      );
+      return { success: true, reply: reply || 'Connected successfully!' };
     } catch (e: any) {
-      return { success: false, error: e?.message || `Network error connecting to ${provider}.` };
+      return {
+        success: false,
+        error: e?.message || `Network error connecting to ${detected.label}.`,
+      };
     }
   },
 };

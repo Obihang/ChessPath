@@ -1,0 +1,10 @@
+{
+  "name": "chesspath-optional-edge-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx edgeTtsServer.ts",
+    "test:edge": "tsx testEdge.ts"
+  }
+}

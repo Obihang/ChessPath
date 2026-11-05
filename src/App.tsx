@@ -5,7 +5,7 @@ import { storageService } from './services/storageService';
 import { soundService } from './services/audioService';
 import { TopBar } from './components/common/TopBar';
 import { BottomNav } from './components/common/BottomNav';
-import { PlayVsComputer } from './components/PlayVsComputer';
+import { PlayView } from './components/play/PlayView';
 import { LearnView } from './components/learn/LearnView';
 import { OpeningsView } from './components/openings/OpeningsView';
 import { PracticeView } from './components/practice/PracticeView';
@@ -165,9 +165,8 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 pb-20 overflow-x-hidden">
         {activeTab === 'play' && (
-          <PlayVsComputer
+          <PlayView
             settings={settings}
-            progress={progress}
             onOpenSettings={() => setIsSettingsOpen(true)}
             onOpenCoach={() => setIsCoachOpen(true)}
             onPositionChange={handlePositionChange}

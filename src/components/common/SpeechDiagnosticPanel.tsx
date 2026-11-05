@@ -113,7 +113,13 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
   const isMuted = !settings.voiceEnabled;
   const isVolumeZero = settings.voiceVolume <= 0;
-  const activeEngine = settings.ttsEngine || (settings.useNaturalVoice === false ? 'browser' : 'edge');
+  const activeEngine = settings.ttsEngine || 'gemini';
+  const activeVoiceLabel =
+    activeEngine === 'gemini'
+      ? settings.geminiVoice || 'Kore'
+      : activeEngine === 'edge'
+      ? settings.edgeVoice || 'en-US-AndrewNeural'
+      : 'Browser Default';
 
   return (
     <div className="bg-slate-950/70 border border-slate-800 rounded-xl overflow-hidden text-xs">
@@ -155,7 +161,12 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
         {/* Status Indicators Pill Bar */}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
           <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300 font-medium">
-            Engine: {activeEngine === 'edge' ? 'Edge Neural TTS' : 'Standard Device TTS'}
+            Engine:{' '}
+            {activeEngine === 'gemini'
+              ? 'Gemini TTS'
+              : activeEngine === 'edge'
+              ? 'Edge Neural Proxy'
+              : 'Standard Device TTS'}
           </span>
 
           <span
@@ -169,7 +180,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
           </span>
 
           <span className="px-2 py-0.5 rounded-full border bg-slate-800 border-slate-700 text-slate-300 font-medium">
-            Voice: {settings.edgeVoice || 'en-US-AndrewNeural'}
+            Voice: {activeVoiceLabel}
           </span>
 
           <span

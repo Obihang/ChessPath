@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -29,16 +29,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run linter and type check
+        run: npm run lint
+
       - name: Validate content
         run: npm run validate
 
-      - name: Run linter and type check
-        run: npm run lint
+      - name: Run engine and coach regression tests
+        run: |
+          npm run test:engine
+          npm run test:coach
 
       - name: Build static web app
         run: npm run build
         env:
           VITE_BASE_PATH: /ChessPath/
+
+      - name: Verify no /api/ backend routes exist in src or dist
+        run: |
+          if grep -rn "/api/" src dist; then
+            echo "Error: Found forbidden '/api/' backend route reference in src or dist!"
+            exit 1
+          fi
 
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3

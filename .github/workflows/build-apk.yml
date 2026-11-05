@@ -9,7 +9,7 @@ on:
 
 jobs:
   verify-web:
-    name: Verify Web TypeScript & Build
+    name: Verify Web TypeScript, Tests & Build
     runs-on: ubuntu-latest
 
     steps:
@@ -31,13 +31,25 @@ jobs:
       - name: Validate chess curriculum & puzzles
         run: npm run validate
 
+      - name: Run engine and coach regression tests
+        run: |
+          npm run test:engine
+          npm run test:coach
+
       - name: Build web application
         run: npm run build
 
+      - name: Verify no /api/ backend routes exist in src or dist
+        run: |
+          if grep -rn "/api/" src dist; then
+            echo "Error: Found forbidden '/api/' backend route reference in src or dist!"
+            exit 1
+          fi
+
   build-android-apk:
-    name: Build Android Debug APK (main only)
+    name: Build Android Debug APK
     needs: verify-web
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev'))
     runs-on: ubuntu-latest
 
     steps:
@@ -57,6 +69,13 @@ jobs:
         run: npm run build
         env:
           VITE_TARGET: android
+
+      - name: Verify no /api/ backend routes exist in Android dist
+        run: |
+          if grep -rn "/api/" src dist; then
+            echo "Error: Found forbidden '/api/' backend route reference in src or dist!"
+            exit 1
+          fi
 
       - name: Set up Java JDK 21
         uses: actions/setup-java@v4
@@ -88,7 +107,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: chesspath-debug-apk
+          name: ${{ github.ref_name == 'dev' && 'chesspath-debug-apk-dev' || 'chesspath-debug-apk' }}
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 14
 

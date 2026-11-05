@@ -17,6 +17,7 @@ import {
   User,
   Activity,
   Radio,
+  Loader2,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -55,6 +56,8 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
   ]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeakingMessageId, setIsSpeakingMessageId] = useState<string | null>(null);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -97,7 +100,6 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     return unsubscribe;
   }, []);
 
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -107,17 +109,21 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     }
   }, [messages, isLoading]);
 
-  // Stop active speech when drawer closes
+  // Stop active speech or recording when drawer closes
   useEffect(() => {
     if (!isOpen) {
       speechService.stop();
+      if (isRecording) {
+        speechService.stopRecording().catch(() => {});
+        setIsRecording(false);
+      }
       if (activeAudioRef.current) {
         activeAudioRef.current.pause();
       }
       setIsSpeakingMessageId(null);
       setSpeechError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, isRecording]);
 
   const speakText = async (msgId: string, text: string) => {
     speechService.unlock();
@@ -139,9 +145,51 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
       },
     });
 
-    if (!res.success && res.error) {
+    if (res.proxyWarning) {
+      setSpeechError(res.proxyWarning);
+    } else if (!res.success && res.error) {
       setIsSpeakingMessageId(null);
       setSpeechError(res.error);
+    }
+  };
+
+  const handleToggleRecordVoiceQuestion = async () => {
+    speechService.unlock();
+    setSpeechError(null);
+
+    if (isRecording) {
+      setIsRecording(false);
+      setIsTranscribing(true);
+      try {
+        const audioBlob = await speechService.stopRecording();
+        if (!audioBlob || audioBlob.size === 0) {
+          setSpeechError('No audio captured from microphone.');
+          return;
+        }
+        const sttRes = await geminiService.transcribeAudio(audioBlob, audioBlob.type);
+        if (sttRes.success && sttRes.transcript) {
+          if (settings.autoSendTranscribed) {
+            await handleSendMessage(sttRes.transcript);
+          } else {
+            setInputText((prev) => (prev ? `${prev} ${sttRes.transcript}` : sttRes.transcript!));
+          }
+        } else {
+          setSpeechError(sttRes.error || 'Audio transcription failed.');
+        }
+      } catch (err: any) {
+        setSpeechError(err?.message || 'Failed to transcribe audio.');
+      } finally {
+        setIsTranscribing(false);
+      }
+      return;
+    }
+
+    try {
+      await speechService.startRecording(30000);
+      setIsRecording(true);
+    } catch (err: any) {
+      setIsRecording(false);
+      setSpeechError(err?.message || 'Microphone access denied or unavailable.');
     }
   };
 
@@ -161,28 +209,26 @@ export const AICoachDrawer: React.FC<AICoachDrawerProps> = ({
     setIsLoading(true);
 
     try {
-      // Fetch engine analysis for current position to ground advice in truth
       let evalContext = '';
       try {
         const evalInfo = await engineService.evaluate(currentFen, 300);
         if (evalInfo && evalInfo.bestMove) {
-          const evalStr = evalInfo.mate !== null
-            ? `mate in ${Math.abs(evalInfo.mate)}`
-            : evalInfo.score !== null
-            ? `${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
-            : 'unrated';
+          const evalStr =
+            evalInfo.mate !== null
+              ? `mate in ${Math.abs(evalInfo.mate)}`
+              : evalInfo.score !== null
+              ? `${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
+              : 'unrated';
           evalContext = ` Engine analysis: evaluation is ${evalStr}, best move is ${evalInfo.bestMoveSan || evalInfo.bestMove}.`;
         }
       } catch {
         // Continue if evaluation times out
       }
 
-      // Build conversation history (last 12 messages)
       const history = messages
         .slice(-12)
         .map((m) => ({ role: m.sender === 'user' ? 'user' : 'model', parts: [{ text: m.text }] }));
 
-      // Append current user message
       history.push({ role: 'user', parts: [{ text: textToSend.trim() }] });
 
       const systemInstruction = `You are an expert chess coach.
@@ -218,25 +264,32 @@ Strict instructions:
         try {
           const evalInfo = await engineService.evaluate(currentFen, 400);
           if (evalInfo && evalInfo.bestMove) {
-            const engineName = evalInfo.source === 'stockfish' && evalInfo.isAvailable ? 'Stockfish 19' : 'Engine';
-            const evalStr = evalInfo.mate !== null
-              ? `mate in ${Math.abs(evalInfo.mate)}`
-              : evalInfo.score !== null
-              ? `eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
-              : 'tactical assessment';
-            engineSuggestion = `${engineName} Analysis: Recommended move is ${evalInfo.bestMoveSan || evalInfo.bestMove} (${evalStr}).\n\n💡 Tip: Paste your API key (Groq, OpenRouter, Bytez, or Gemini) in Settings for conversational AI chat!`;
+            const engineName =
+              evalInfo.source === 'stockfish' && evalInfo.isAvailable ? 'Stockfish 19' : 'Engine';
+            const evalStr =
+              evalInfo.mate !== null
+                ? `mate in ${Math.abs(evalInfo.mate)}`
+                : evalInfo.score !== null
+                ? `eval: ${evalInfo.score >= 0 ? '+' : ''}${evalInfo.score} cp`
+                : 'tactical assessment';
+            engineSuggestion = `${engineName} Analysis: Recommended move is ${evalInfo.bestMoveSan || evalInfo.bestMove} (${evalStr}).\n\n💡 Tip: Paste your API key (Gemini, Groq, OpenRouter, or OpenAI) in Settings for conversational AI chat!`;
           } else {
-            engineSuggestion = 'No API key set. Paste your Groq, OpenRouter, Bytez, or Gemini API key in Settings to unlock conversational AI chat!';
+            engineSuggestion =
+              'No API key set. Paste your Gemini, Groq, OpenRouter, or OpenAI API key in Settings to unlock conversational AI chat!';
           }
         } catch {
-          engineSuggestion = 'No API key set. Paste your Groq, OpenRouter, Bytez, or Gemini API key in Settings for conversational AI chat!';
+          engineSuggestion =
+            'No API key set. Paste your Gemini, Groq, OpenRouter, or OpenAI API key in Settings for conversational AI chat!';
         }
         errorMessage = engineSuggestion;
       } else if (msg.includes('401') || msg.includes('403') || msg.includes('API_KEY_INVALID')) {
         errorMessage = `Invalid API key for ${settings.aiProvider || 'AI Provider'} (401/403). Please verify your key in Settings.`;
       } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
         errorMessage = `Quota or rate limit reached on ${settings.aiProvider || 'AI Provider'} (429). Please wait about a minute and try again.`;
-      } else if (msg.includes('Failed to fetch') || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      } else if (
+        msg.includes('Failed to fetch') ||
+        (typeof navigator !== 'undefined' && !navigator.onLine)
+      ) {
         errorMessage = 'You appear to be offline or network connection was lost.';
       } else if (msg.includes('404') || msg.includes('not found') || msg.includes('NotFound')) {
         errorMessage = `Model or endpoint not found on ${settings.aiProvider || 'AI Provider'}. Check Base URL and Model Name in Settings.`;
@@ -294,7 +347,6 @@ Strict instructions:
               <option value="competitive">Competitive</option>
             </select>
 
-            {/* Always-visible Voice Coach Mute button */}
             <button
               type="button"
               onClick={() => {
@@ -330,7 +382,6 @@ Strict instructions:
               )}
             </button>
 
-            {/* Diagnostics Panel Toggle button */}
             <button
               type="button"
               onClick={() => setShowDiagnostics(!showDiagnostics)}
@@ -369,7 +420,7 @@ Strict instructions:
           <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between text-xs text-amber-300">
             <div className="flex items-center gap-2">
               <Key className="w-3.5 h-3.5 shrink-0" />
-              <span>Add your Gemini key for live coaching</span>
+              <span>Add your Gemini key for live coaching & voice</span>
             </div>
             <button
               onClick={onOpenSettings}
@@ -383,7 +434,7 @@ Strict instructions:
         {/* Speech Error Banner */}
         {speechError && (
           <div className="px-4 py-2 bg-rose-500/15 border-b border-rose-500/30 flex items-center justify-between text-xs text-rose-300 animate-in fade-in duration-150">
-            <span className="truncate">⚠️ Voice failed: {speechError}</span>
+            <span className="truncate">⚠️ {speechError}</span>
             <button
               onClick={() => setSpeechError(null)}
               className="p-1 hover:text-rose-100 rounded cursor-pointer"
@@ -459,7 +510,11 @@ Strict instructions:
                         }`}
                         title={isSpeakingThis ? 'Stop speaking' : 'Read message aloud'}
                       >
-                        {isSpeakingThis ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                        {isSpeakingThis ? (
+                          <VolumeX className="w-3.5 h-3.5" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     </div>
                   )}
@@ -486,7 +541,7 @@ Strict instructions:
           )}
         </div>
 
-        {/* Input Bar */}
+        {/* Input Bar with Voice Transcription Button */}
         <div className="p-3 border-t border-slate-800 bg-slate-950/60">
           <form
             onSubmit={(e) => {
@@ -495,9 +550,37 @@ Strict instructions:
             }}
             className="flex items-center gap-1.5"
           >
+            <button
+              type="button"
+              onClick={handleToggleRecordVoiceQuestion}
+              disabled={isLoading || isTranscribing}
+              className={`p-2 rounded-xl border transition-colors shrink-0 ${
+                isRecording
+                  ? 'bg-rose-500/20 border-rose-500 text-rose-300 animate-pulse'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-amber-300 hover:border-slate-700'
+              }`}
+              title={
+                isRecording
+                  ? 'Click to stop recording and transcribe via Gemini STT'
+                  : 'Record voice question (Gemini STT)'
+              }
+            >
+              {isTranscribing ? (
+                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              ) : (
+                <Radio className="w-4 h-4" />
+              )}
+            </button>
+
             <input
               type="text"
-              placeholder="Ask anything about this position..."
+              placeholder={
+                isRecording
+                  ? 'Listening... Click button to stop & transcribe'
+                  : isTranscribing
+                  ? 'Transcribing audio with Gemini...'
+                  : 'Ask anything about this position...'
+              }
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-hidden focus:border-amber-500"
@@ -505,7 +588,7 @@ Strict instructions:
 
             <button
               type="submit"
-              disabled={!inputText.trim() || isLoading}
+              disabled={!inputText.trim() || isLoading || isRecording || isTranscribing}
               className="p-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-slate-950 rounded-xl transition-colors"
             >
               <Send className="w-4 h-4" />

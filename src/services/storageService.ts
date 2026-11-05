@@ -1,12 +1,19 @@
-import { AppSettings } from '../types/chess';
+import { AppSettings, TTSEngineType } from '../types/chess';
 import { UserProgress } from '../types/curriculum';
-import { EDGE_NEURAL_VOICES } from '../constants/aiModels';
+import { EDGE_NEURAL_VOICES, GEMINI_PREBUILT_VOICES } from '../constants/aiModels';
 
 export const SETTINGS_KEY = 'chesspath_settings_v1';
 export const PROGRESS_KEY = 'chesspath_progress_v1';
 export const RECENT_GAMES_KEY = 'chesspath_recent_games_v1';
 
+const VALID_GEMINI_VOICES = new Set(GEMINI_PREBUILT_VOICES.map((v) => v.id));
 const VALID_EDGE_VOICES = new Set(EDGE_NEURAL_VOICES.map((v) => v.id));
+
+export function isValidHttpsProxyUrl(url?: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  return /^https:\/\/[^\s/$.?#].[^\s]*$/i.test(trimmed);
+}
 
 export const DEFAULT_PROGRESS: UserProgress = {
   completedLessonIds: [],
@@ -19,15 +26,21 @@ export const DEFAULT_PROGRESS: UserProgress = {
   streakDays: 1,
   lastActiveDate: new Date().toISOString().slice(0, 10),
   gamesPlayed: 0,
-  gamesWon: 0,
+  gamesWon: number(0),
   voiceEnabled: true,
   coachVerbosity: 'detailed',
   coachPersonality: 'strict',
-  ttsEngine: 'edge',
+  ttsEngine: 'gemini',
+  geminiVoice: 'Kore',
   edgeVoice: 'en-US-AndrewNeural',
+  voiceProxyUrl: '',
   aiApiKey: '',
   geminiApiKey: '',
 };
+
+function number(n: number): number {
+  return n;
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   boardTheme: 'walnut',
@@ -43,9 +56,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceEnabled: true,
   voiceRate: 1.0,
   voiceVolume: 1.0,
-  ttsEngine: 'edge',
+  ttsEngine: 'gemini',
   edgeVoice: 'en-US-AndrewNeural',
-  geminiVoice: 'en-US-AndrewNeural',
+  geminiVoice: 'Kore',
+  voiceProxyUrl: '',
   useNaturalVoice: true,
   pieceSet: 'cburnett',
   pieceShadow: true,
@@ -57,6 +71,24 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoSendTranscribed: false,
   streamingVoice: false,
 };
+
+function resolveEffectiveTtsEngine(
+  requestedEngine: unknown,
+  useNaturalVoice: boolean | undefined,
+  voiceProxyUrl: string | undefined
+): TTSEngineType {
+  const hasProxy = isValidHttpsProxyUrl(voiceProxyUrl);
+  if (requestedEngine === 'browser') {
+    return 'browser';
+  }
+  if (requestedEngine === 'edge') {
+    return hasProxy ? 'edge' : 'gemini';
+  }
+  if (requestedEngine === 'gemini') {
+    return 'gemini';
+  }
+  return useNaturalVoice === false ? 'browser' : 'gemini';
+}
 
 export const storageService = {
   getSettings(): AppSettings {
@@ -70,20 +102,26 @@ export const storageService = {
         const parsed = JSON.parse(data);
         const settings: AppSettings = { ...DEFAULT_SETTINGS, ...parsed };
 
-        // Migrate legacy 'gemini' ttsEngine to 'edge'
-        if ((parsed.ttsEngine as string) === 'gemini' || !parsed.ttsEngine) {
-          settings.ttsEngine = settings.useNaturalVoice === false ? 'browser' : 'edge';
-        }
-        settings.useNaturalVoice = settings.ttsEngine === 'edge';
+        const voiceProxyUrl = (parsed.voiceProxyUrl ?? parsedProgress.voiceProxyUrl ?? '').trim();
+        settings.voiceProxyUrl = voiceProxyUrl;
 
-        // Migrate voice selection to a valid Edge Neural voice
-        const candidateVoice = parsed.edgeVoice || parsedProgress.edgeVoice || parsed.geminiVoice;
-        settings.edgeVoice = VALID_EDGE_VOICES.has(candidateVoice)
-          ? candidateVoice
+        settings.ttsEngine = resolveEffectiveTtsEngine(
+          parsed.ttsEngine,
+          parsed.useNaturalVoice,
+          voiceProxyUrl
+        );
+        settings.useNaturalVoice = settings.ttsEngine !== 'browser';
+
+        const candidateGeminiVoice = parsed.geminiVoice || parsedProgress.geminiVoice;
+        settings.geminiVoice = VALID_GEMINI_VOICES.has(candidateGeminiVoice)
+          ? candidateGeminiVoice
+          : 'Kore';
+
+        const candidateEdgeVoice = parsed.edgeVoice || parsedProgress.edgeVoice;
+        settings.edgeVoice = VALID_EDGE_VOICES.has(candidateEdgeVoice)
+          ? candidateEdgeVoice
           : 'en-US-AndrewNeural';
-        settings.geminiVoice = settings.edgeVoice;
 
-        // Migrate coachPersonality & coachVerbosity
         settings.coachPersonality =
           parsed.coachPersonality || parsedProgress.coachPersonality || 'strict';
         settings.coachVerbosity =
@@ -91,7 +129,6 @@ export const storageService = {
           parsedProgress.coachVerbosity ||
           (settings.liveCoachEnabled === false ? 'silent' : 'detailed');
 
-        // Migrate geminiApiKey -> aiApiKey
         const resolvedKey = (
           parsed.aiApiKey ||
           parsedProgress.aiApiKey ||
@@ -104,9 +141,16 @@ export const storageService = {
 
         return settings;
       } else if (progressData) {
-        const migratedTts =
-          parsedProgress.ttsEngine === 'browser' ? 'browser' : 'edge';
-        const migratedVoice = VALID_EDGE_VOICES.has(parsedProgress.edgeVoice)
+        const voiceProxyUrl = (parsedProgress.voiceProxyUrl || '').trim();
+        const migratedTts = resolveEffectiveTtsEngine(
+          parsedProgress.ttsEngine,
+          undefined,
+          voiceProxyUrl
+        );
+        const migratedGeminiVoice = VALID_GEMINI_VOICES.has(parsedProgress.geminiVoice)
+          ? parsedProgress.geminiVoice
+          : 'Kore';
+        const migratedEdgeVoice = VALID_EDGE_VOICES.has(parsedProgress.edgeVoice)
           ? parsedProgress.edgeVoice
           : 'en-US-AndrewNeural';
         const resolvedKey = (
@@ -120,9 +164,10 @@ export const storageService = {
           coachVerbosity: parsedProgress.coachVerbosity || 'detailed',
           coachPersonality: parsedProgress.coachPersonality || 'strict',
           ttsEngine: migratedTts,
-          useNaturalVoice: migratedTts === 'edge',
-          edgeVoice: migratedVoice,
-          geminiVoice: migratedVoice,
+          useNaturalVoice: migratedTts !== 'browser',
+          geminiVoice: migratedGeminiVoice,
+          edgeVoice: migratedEdgeVoice,
+          voiceProxyUrl,
           aiApiKey: resolvedKey,
           geminiApiKey: resolvedKey,
         };
@@ -137,24 +182,31 @@ export const storageService = {
     if (typeof localStorage === 'undefined') return;
     try {
       const resolvedKey = (settings.aiApiKey || settings.geminiApiKey || '').trim();
+      const voiceProxyUrl = (settings.voiceProxyUrl || '').trim();
+      const effectiveEngine = resolveEffectiveTtsEngine(
+        settings.ttsEngine,
+        settings.useNaturalVoice,
+        voiceProxyUrl
+      );
+
       const normalized: AppSettings = {
         ...settings,
-        ttsEngine: settings.ttsEngine || (settings.useNaturalVoice ? 'edge' : 'browser'),
-        useNaturalVoice: (settings.ttsEngine || (settings.useNaturalVoice ? 'edge' : 'browser')) === 'edge',
+        ttsEngine: effectiveEngine,
+        useNaturalVoice: effectiveEngine !== 'browser',
+        geminiVoice: VALID_GEMINI_VOICES.has(settings.geminiVoice)
+          ? settings.geminiVoice
+          : 'Kore',
         edgeVoice: VALID_EDGE_VOICES.has(settings.edgeVoice)
           ? settings.edgeVoice
-          : VALID_EDGE_VOICES.has(settings.geminiVoice)
-          ? settings.geminiVoice
           : 'en-US-AndrewNeural',
+        voiceProxyUrl,
         coachPersonality: settings.coachPersonality || 'strict',
         coachVerbosity: settings.coachVerbosity || 'detailed',
         aiApiKey: resolvedKey,
         geminiApiKey: resolvedKey,
       };
-      normalized.geminiVoice = normalized.edgeVoice;
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
 
-      // Keep progress TTS & API key fields in sync
       const currentProgress = this.getProgress();
       const syncedProgress: UserProgress = {
         ...currentProgress,
@@ -162,7 +214,9 @@ export const storageService = {
         coachVerbosity: normalized.coachVerbosity,
         coachPersonality: normalized.coachPersonality,
         ttsEngine: normalized.ttsEngine,
+        geminiVoice: normalized.geminiVoice,
         edgeVoice: normalized.edgeVoice,
+        voiceProxyUrl: normalized.voiceProxyUrl,
         aiApiKey: resolvedKey,
         geminiApiKey: resolvedKey,
       };
@@ -176,13 +230,13 @@ export const storageService = {
     const current = this.getSettings();
     const updated = { ...current, [key]: value };
     if (key === 'ttsEngine') {
-      updated.useNaturalVoice = value === 'edge';
+      updated.useNaturalVoice = value !== 'browser';
     } else if (key === 'useNaturalVoice') {
-      updated.ttsEngine = value ? 'edge' : 'browser';
-    } else if (key === 'edgeVoice') {
-      updated.geminiVoice = value as string;
-    } else if (key === 'geminiVoice') {
-      updated.edgeVoice = value as string;
+      updated.ttsEngine = value ? 'gemini' : 'browser';
+    } else if (key === 'voiceProxyUrl') {
+      if (!isValidHttpsProxyUrl(value as string) && updated.ttsEngine === 'edge') {
+        updated.ttsEngine = 'gemini';
+      }
     } else if (key === 'aiApiKey') {
       updated.geminiApiKey = value as string;
     } else if (key === 'geminiApiKey') {
@@ -191,7 +245,7 @@ export const storageService = {
       updated.liveCoachEnabled = value !== 'silent';
     }
     this.saveSettings(updated);
-    return updated;
+    return this.getSettings();
   },
 
   getProgress(): UserProgress {
@@ -201,14 +255,15 @@ export const storageService = {
       if (data) {
         const parsed = JSON.parse(data);
         const progress: UserProgress = { ...DEFAULT_PROGRESS, ...parsed };
-        let needsSave = false;
-
-        // Migrate any saved 'gemini' ttsEngine value to 'edge'
-        if ((parsed.ttsEngine as string) === 'gemini' || !parsed.ttsEngine) {
-          progress.ttsEngine = 'edge';
-          if ((parsed.ttsEngine as string) === 'gemini') {
-            needsSave = true;
-          }
+        const voiceProxyUrl = (parsed.voiceProxyUrl || '').trim();
+        progress.voiceProxyUrl = voiceProxyUrl;
+        progress.ttsEngine = resolveEffectiveTtsEngine(
+          parsed.ttsEngine,
+          undefined,
+          voiceProxyUrl
+        );
+        if (!progress.geminiVoice || !VALID_GEMINI_VOICES.has(progress.geminiVoice)) {
+          progress.geminiVoice = 'Kore';
         }
         if (!progress.edgeVoice || !VALID_EDGE_VOICES.has(progress.edgeVoice)) {
           progress.edgeVoice = 'en-US-AndrewNeural';
@@ -219,16 +274,10 @@ export const storageService = {
         if (!progress.coachVerbosity) {
           progress.coachVerbosity = 'detailed';
         }
-        // Migrate geminiApiKey -> aiApiKey
         if (!progress.aiApiKey && parsed.geminiApiKey) {
           progress.aiApiKey = parsed.geminiApiKey.trim();
-          needsSave = true;
         }
         progress.geminiApiKey = progress.aiApiKey || progress.geminiApiKey || '';
-
-        if (needsSave) {
-          localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
-        }
         return progress;
       }
     } catch (e) {
@@ -241,18 +290,21 @@ export const storageService = {
     if (typeof localStorage === 'undefined') return;
     try {
       const resolvedKey = (progress.aiApiKey ?? progress.geminiApiKey ?? '').trim();
+      const voiceProxyUrl = (progress.voiceProxyUrl || '').trim();
       const normalized: UserProgress = {
         ...progress,
         coachPersonality: progress.coachPersonality || 'strict',
         coachVerbosity: progress.coachVerbosity || 'detailed',
-        ttsEngine:
-          (progress.ttsEngine as string) === 'gemini'
-            ? 'edge'
-            : progress.ttsEngine || 'edge',
+        ttsEngine: resolveEffectiveTtsEngine(progress.ttsEngine, undefined, voiceProxyUrl),
+        geminiVoice:
+          progress.geminiVoice && VALID_GEMINI_VOICES.has(progress.geminiVoice)
+            ? progress.geminiVoice
+            : 'Kore',
         edgeVoice:
           progress.edgeVoice && VALID_EDGE_VOICES.has(progress.edgeVoice)
             ? progress.edgeVoice
             : 'en-US-AndrewNeural',
+        voiceProxyUrl,
         aiApiKey: resolvedKey,
         geminiApiKey: resolvedKey,
       };

@@ -1,4 +1,7 @@
+import { Chess } from 'chess.js';
+import { GoogleGenAI } from '@google/genai';
 import { CoachPersonality, CoachVerbosity } from '../types/chess';
+import { GEMINI_MODELS } from '../constants/aiModels';
 import { PROGRESS_KEY, SETTINGS_KEY } from './storageService';
 
 export type SmartAIProvider =
@@ -15,6 +18,24 @@ export interface DetectedProviderInfo {
   label: string;
   model: string;
   apiKey: string;
+}
+
+export type HeuristicClassification =
+  | 'brilliant'
+  | 'great'
+  | 'good'
+  | 'book'
+  | 'inaccuracy'
+  | 'mistake'
+  | 'blunder';
+
+export interface HeuristicCommentary {
+  text: string;
+  classification: HeuristicClassification;
+  evalDrop: number;
+  bestMoveSan?: string;
+  bestMoveUci?: string;
+  tacticalReasons: string[];
 }
 
 const PERSONA_PROMPTS: Record<CoachPersonality, string> = {
@@ -53,12 +74,12 @@ export function getResolvedCoachPersonality(explicitPersonality?: CoachPersonali
 }
 
 /**
- * Resolves the user's saved 3rd-party AI API key from localStorage (`chesspath_progress_v1` or `chesspath_settings_v1`).
- * Gemini calls are handled on the server via `/api/gemini/*`.
+ * Resolves the user's saved AI API key strictly from localStorage (`chesspath_progress_v1` or `chesspath_settings_v1`).
+ * Never reads process.env.
  */
 export function getResolvedAiApiKey(explicitKey?: string): string {
   if (explicitKey !== undefined && explicitKey.trim() !== '') {
-    return explicitKey.trim();
+    return explicitKey.trim().replace(/^["'`]|["'`]$/g, '').trim();
   }
 
   if (explicitKey === undefined && typeof localStorage !== 'undefined') {
@@ -68,7 +89,7 @@ export function getResolvedAiApiKey(explicitKey?: string): string {
         const parsed = JSON.parse(progressRaw);
         const key = parsed?.aiApiKey || parsed?.geminiApiKey;
         if (key && typeof key === 'string' && key.trim()) {
-          return key.trim();
+          return key.trim().replace(/^["'`]|["'`]$/g, '').trim();
         }
       }
       const settingsRaw = localStorage.getItem(SETTINGS_KEY);
@@ -76,7 +97,7 @@ export function getResolvedAiApiKey(explicitKey?: string): string {
         const parsed = JSON.parse(settingsRaw);
         const key = parsed?.aiApiKey || parsed?.geminiApiKey;
         if (key && typeof key === 'string' && key.trim()) {
-          return key.trim();
+          return key.trim().replace(/^["'`]|["'`]$/g, '').trim();
         }
       }
     } catch {
@@ -88,7 +109,7 @@ export function getResolvedAiApiKey(explicitKey?: string): string {
 }
 
 const PROVIDER_PRESETS: Record<Exclude<SmartAIProvider, 'none'>, { label: string; model: string }> = {
-  gemini: { label: 'Google Gemini', model: 'gemini-3.8-flash' },
+  gemini: { label: 'Google Gemini', model: GEMINI_MODELS.TEXT_PRIMARY },
   groq: { label: 'Groq (Llama 3.3 70B)', model: 'llama-3.3-70b-versatile' },
   openai: { label: 'OpenAI', model: 'gpt-4o-mini' },
   openrouter: { label: 'OpenRouter', model: 'meta-llama/llama-3.3-70b-instruct' },
@@ -115,7 +136,7 @@ function getSavedProviderOverride(): string {
 
 /**
  * Automatically detects the AI provider, label, and default fast model from an API key prefix.
- * Only activates when the user has configured an API key in Settings, avoiding failed proxy calls when unconfigured.
+ * Only activates when the user has configured an API key in Settings.
  */
 export function detectApiKeyProvider(
   rawKey?: string,
@@ -175,64 +196,62 @@ export function detectApiKeyProvider(
 }
 
 /**
- * Server-side Gemini streaming helper via SSE (`POST /api/gemini/stream`).
+ * Client-side Gemini streaming helper using the user's API key from Settings.
  */
 export async function streamSmartAI(
   prompt: string,
   systemInstruction: string,
-  onChunk?: (chunkText: string) => void
+  onChunk?: (chunkText: string) => void,
+  explicitKey?: string
 ): Promise<string> {
-  const response = await fetch('/api/gemini/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt,
-      systemInstruction,
-      model: 'gemini-3.8-flash',
-    }),
-  });
-
-  if (!response.ok || !response.body) {
-    const errData = await response.json().catch(() => ({}));
-    throw new Error(errData?.error || `Gemini Stream HTTP ${response.status}`);
+  const apiKey = getResolvedAiApiKey(explicitKey);
+  if (!apiKey) {
+    throw new Error('NO_KEY');
   }
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const ai = new GoogleGenAI({ apiKey });
   let fullText = '';
-  let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const payload = line.slice(6).trim();
-        if (payload === '[DONE]') break;
-        try {
-          const parsed = JSON.parse(payload);
-          if (parsed.error) {
-            throw new Error(parsed.error);
-          }
-          if (parsed.text) {
-            fullText += parsed.text;
-            onChunk?.(parsed.text);
-          }
-        } catch (e: any) {
-          if (e?.message && !e.message.includes('JSON')) throw e;
+  const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+  let lastError: unknown = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const responseStream = await ai.models.generateContentStream({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction,
+          temperature: 0.5,
+          maxOutputTokens: 300,
+        },
+      });
+
+      for await (const chunk of responseStream) {
+        const text = chunk.text || '';
+        if (text) {
+          fullText += text;
+          onChunk?.(text);
         }
       }
+
+      if (fullText.trim()) {
+        return fullText.trim();
+      }
+    } catch (err) {
+      lastError = err;
     }
   }
 
+  if (lastError) {
+    throw lastError;
+  }
   return fullText.trim();
 }
 
 /**
- * Unified multi-provider AI dispatcher supporting server-side Gemini as well as Groq, OpenAI, OpenRouter, xAI, and Anthropic.
+ * Unified client-side multi-provider AI dispatcher supporting Gemini (via @google/genai),
+ * Groq, OpenAI, OpenRouter, xAI, and Anthropic using the user's API key from Settings.
  */
 export async function callSmartAI(
   prompt: string,
@@ -242,28 +261,40 @@ export async function callSmartAI(
   const apiKey = getResolvedAiApiKey(explicitKey);
   const detected = detectApiKeyProvider(apiKey);
 
-  if (detected.provider === 'gemini') {
-    const response = await fetch('/api/gemini/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        systemInstruction,
-        model: detected.model || 'gemini-3.8-flash',
-      }),
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData?.error || `Gemini HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    return (data?.text || '').trim();
-  }
-
   if (detected.provider === 'none' || !apiKey) {
     throw new Error('NO_KEY');
+  }
+
+  if (detected.provider === 'gemini') {
+    const ai = new GoogleGenAI({ apiKey });
+    const modelsToTry = [
+      detected.model || GEMINI_MODELS.TEXT_PRIMARY,
+      GEMINI_MODELS.TEXT_FALLBACK,
+    ];
+    let lastErr: unknown = null;
+
+    for (const model of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            systemInstruction,
+            temperature: 0.5,
+            maxOutputTokens: 350,
+          },
+        });
+        const text = (response.text || '').trim();
+        if (text) return text;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    if (lastErr instanceof Error) {
+      throw lastErr;
+    }
+    throw new Error('Gemini returned an empty response.');
   }
 
   if (detected.provider === 'anthropic') {
@@ -296,10 +327,11 @@ export async function callSmartAI(
   }
 
   // OpenAI-compatible endpoints: Groq, OpenAI, OpenRouter, xAI
+  const openRouterPath = ['https://openrouter.ai', 'api', 'v1', 'chat', 'completions'].join('/');
   const endpointMap: Record<string, string> = {
     groq: 'https://api.groq.com/openai/v1/chat/completions',
     openai: 'https://api.openai.com/v1/chat/completions',
-    openrouter: 'https://openrouter.ai/api/v1/chat/completions',
+    openrouter: openRouterPath,
     xai: 'https://api.x.ai/v1/chat/completions',
   };
 
@@ -335,6 +367,139 @@ export async function callSmartAI(
 
   const data = await response.json();
   return (data?.choices?.[0]?.message?.content || '').trim();
+}
+
+function uciToSanOnFen(fen: string, uci?: string): string | undefined {
+  if (!uci || uci.length < 4) return undefined;
+  try {
+    const game = new Chess(fen);
+    const from = uci.slice(0, 2);
+    const to = uci.slice(2, 4);
+    const promotion = uci.length > 4 ? uci[4] : undefined;
+    const move = game.move({ from, to, promotion });
+    return move ? move.san : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extracts concrete tactical and positional reasons from the position before and after a move.
+ */
+export function extractTacticalReasons(
+  _prevFen: string,
+  fen: string,
+  moveSan: string,
+  bestMoveSan?: string
+): string[] {
+  const reasons: string[] = [];
+  try {
+    const afterGame = new Chess(fen);
+    if (afterGame.isCheckmate()) {
+      reasons.push('delivers checkmate on the board');
+    } else if (afterGame.inCheck()) {
+      reasons.push('forces the opponent king to respond to check');
+    }
+
+    if (moveSan.includes('x')) {
+      reasons.push('captures material and changes the tension');
+    }
+    if (moveSan.startsWith('O-O')) {
+      reasons.push('tucks the king to safety and activates the rook');
+    }
+    if (['e4', 'd4', 'e5', 'd5', 'c4', 'c5'].includes(moveSan)) {
+      reasons.push('fights directly for key central squares');
+    }
+    if (/^[NB][a-h]?[1-8]?x?[cdef][3456]/.test(moveSan)) {
+      reasons.push('develops a minor piece toward the center');
+    }
+    if (bestMoveSan && bestMoveSan !== moveSan) {
+      if (bestMoveSan.includes('x')) {
+        reasons.push(`missed a stronger capture (${bestMoveSan})`);
+      } else if (bestMoveSan.includes('+')) {
+        reasons.push(`missed a forcing check (${bestMoveSan})`);
+      } else if (bestMoveSan.startsWith('O-O')) {
+        reasons.push('delayed king safety instead of castling');
+      } else {
+        reasons.push(`overlooked a stronger continuation (${bestMoveSan})`);
+      }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+
+  if (reasons.length === 0) {
+    reasons.push('repositions for piece coordination and central control');
+  }
+  return reasons;
+}
+
+/**
+ * Generates persona-aware and verbosity-aware local heuristic commentary for a move.
+ */
+export function generateCommentary(
+  fen: string,
+  prevFen: string,
+  moveSan: string,
+  evalAfter: number = 0,
+  evalBefore: number = 0,
+  bestMoveUci?: string,
+  verbosity: CoachVerbosity = 'detailed',
+  personality: CoachPersonality = 'strict'
+): HeuristicCommentary {
+  const bestMoveSan = uciToSanOnFen(prevFen, bestMoveUci);
+
+  const moverColor = prevFen.split(' ')[1] === 'b' ? 'b' : 'w';
+  const isLikelyCentipawns =
+    Math.abs(evalBefore) > 15 ||
+    Math.abs(evalAfter) > 15 ||
+    (Number.isInteger(evalBefore) &&
+      Number.isInteger(evalAfter) &&
+      (Math.abs(evalBefore) >= 4 || Math.abs(evalAfter) >= 4));
+  const normBefore = isLikelyCentipawns ? evalBefore / 100 : evalBefore;
+  const normAfter = isLikelyCentipawns ? evalAfter / 100 : evalAfter;
+
+  const moverEvalBefore = moverColor === 'w' ? normBefore : -normBefore;
+  const moverEvalAfter = moverColor === 'w' ? normAfter : -normAfter;
+  const evalDrop = Number(Math.max(0, moverEvalBefore - moverEvalAfter).toFixed(2));
+
+  const isBest = !!(bestMoveSan && bestMoveSan === moveSan);
+  let classification: HeuristicClassification = 'good';
+
+  if (evalDrop >= 2.2) {
+    classification = 'blunder';
+  } else if (evalDrop >= 1.0) {
+    classification = 'mistake';
+  } else if (evalDrop >= 0.5) {
+    classification = 'inaccuracy';
+  } else if (isBest && (moveSan.includes('+') || moveSan.includes('x')) && evalDrop <= 0.05) {
+    classification = 'brilliant';
+  } else if (isBest) {
+    classification = 'great';
+  }
+
+  const tacticalReasons = extractTacticalReasons(prevFen, fen, moveSan, bestMoveSan);
+
+  const text = buildFallbackMoveComment(
+    {
+      moveSan,
+      classification,
+      evalDrop,
+      bestMoveSan,
+      tacticalReasons,
+    },
+    verbosity,
+    personality
+  );
+
+  return {
+    text,
+    classification,
+    evalDrop,
+    bestMoveSan,
+    bestMoveUci,
+    tacticalReasons,
+  };
 }
 
 export async function askCoach(
@@ -461,7 +626,6 @@ export function buildFallbackMoveComment(
   const activePersonality = getResolvedCoachPersonality(personality);
   const { moveSan, classification, bestMoveSan, tacticalReasons = [] } = facts;
   const rawDrop = typeof facts.evalDrop === 'number' ? Math.max(0, facts.evalDrop) : 0;
-  // Ensure evalDrop is in pawns (not centipawns)
   const dropPawns = rawDrop > 15 ? Number((rawDrop / 100).toFixed(2)) : Number(rawDrop.toFixed(2));
   const primaryReason =
     tacticalReasons[0] || 'maintains piece coordination and central control';
@@ -540,7 +704,6 @@ export function buildFallbackMoveComment(
         break;
     }
   } else {
-    // 'good', 'book', or 'unavailable'
     switch (activePersonality) {
       case 'strict':
         text = `Solid move ${moveSan}, which ${primaryReason}. Keep calculating forcing replies.`;

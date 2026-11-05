@@ -8,11 +8,12 @@ import {
 } from '../../types/chess';
 import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
-import { storageService } from '../../services/storageService';
+import { storageService, isValidHttpsProxyUrl } from '../../services/storageService';
 import { getMoveTimingLogs, coachCommentaryService } from '../../services/coachCommentaryService';
-import { EDGE_NEURAL_VOICES } from '../../constants/aiModels';
+import { EDGE_NEURAL_VOICES, GEMINI_PREBUILT_VOICES } from '../../constants/aiModels';
 import { speak } from '../../utils/voice';
 import { detectApiKeyProvider } from '../../services/coachService';
+import { geminiService } from '../../services/geminiService';
 import { SpeechDiagnosticPanel } from '../common/SpeechDiagnosticPanel';
 import {
   X,
@@ -31,6 +32,8 @@ import {
   Activity,
   Bot,
   Cpu,
+  Globe,
+  Radio,
 } from 'lucide-react';
 import { engineService, EngineStatusInfo } from '../../services/engineService';
 import { PIECE_SETS, preloadPieceSet } from '../../config/pieceSets';
@@ -53,7 +56,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [showKey, setShowKey] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [isTestingVoice, setIsTestingVoice] = useState(false);
-  const [voiceTestStatus, setVoiceTestStatus] = useState<{ type: 'info' | 'success' | 'error'; message: string } | null>(null);
+  const [voiceTestStatus, setVoiceTestStatus] = useState<{
+    type: 'info' | 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [, setEngineStatus] = useState<EngineStatusInfo>(() => engineService.getStatus());
@@ -65,6 +71,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     error?: string;
   } | null>(null);
 
+  const [isTestingApi, setIsTestingApi] = useState(false);
+  const [apiTestStatus, setApiTestStatus] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  const [isTestingMic, setIsTestingMic] = useState(false);
+  const [micTestStatus, setMicTestStatus] = useState<{
+    type: 'info' | 'success' | 'error';
+    message: string;
+  } | null>(null);
+
   const handleTestCoachSampleMove = async () => {
     setIsTestingSampleMove(true);
     setSampleMoveResult(null);
@@ -74,22 +92,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const move = { from: 'g1', to: 'f3', san: 'Nf3', color: 'w' as const, piece: 'n' as const, fen: fenAfter };
 
       const facts = await coachCommentaryService.computeMoveFacts(fenBefore, fenAfter, move, 'w');
-      const commentary = await coachCommentaryService.generateCommentary(facts, ['e4', 'e5', 'Nf3'], localSettings.coachMode, true);
+      const commentary = await coachCommentaryService.generateCommentary(
+        facts,
+        ['e4', 'e5', 'Nf3'],
+        localSettings.coachMode,
+        true
+      );
 
       let timeToFirst = 0;
       let errStr: string | undefined;
 
       const tStart = Date.now();
-      const res = await speechService.speakWithCoach(commentary?.comment || 'Good move.', localSettings, {
-        onFirstAudio: (ms) => {
-          timeToFirst = ms;
-        },
-      });
+      const res = await speechService.speakWithCoach(
+        commentary?.comment || 'Good move.',
+        localSettings,
+        {
+          onFirstAudio: (ms) => {
+            timeToFirst = ms;
+          },
+        }
+      );
       if (!timeToFirst) {
         timeToFirst = Date.now() - tStart;
       }
       if (!res.success) {
         errStr = res.error || 'TTS failed';
+      } else if (res.proxyWarning) {
+        errStr = res.proxyWarning;
       }
 
       const fmtEval = (cp: number | null) => (cp !== null ? `${cp > 0 ? '+' : ''}${cp} cp` : 'N/A');
@@ -121,6 +150,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       speechService.stop();
       setIsSpeaking(false);
       setVoiceTestStatus(null);
+      setApiTestStatus(null);
+      setMicTestStatus(null);
       return;
     }
 
@@ -136,13 +167,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleChange = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     const updated: AppSettings = { ...localSettings, [key]: value };
     if (key === 'ttsEngine') {
-      updated.useNaturalVoice = value === 'edge';
+      updated.useNaturalVoice = value !== 'browser';
     } else if (key === 'useNaturalVoice') {
-      updated.ttsEngine = value ? 'edge' : 'browser';
-    } else if (key === 'edgeVoice') {
-      updated.geminiVoice = value as string;
-    } else if (key === 'geminiVoice') {
-      updated.edgeVoice = value as string;
+      updated.ttsEngine = value ? 'gemini' : 'browser';
+    } else if (key === 'voiceProxyUrl') {
+      if (!isValidHttpsProxyUrl(value as string) && updated.ttsEngine === 'edge') {
+        updated.ttsEngine = 'gemini';
+      }
     } else if (key === 'coachVerbosity') {
       updated.liveCoachEnabled = value !== 'silent';
       updated.coachMode =
@@ -163,10 +194,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleExport = () => {
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(storageService.exportAllData());
+    const dataStr =
+      'data:text/json;charset=utf-8,' + encodeURIComponent(storageService.exportAllData());
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute('download', `chesspath-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadAnchor.setAttribute(
+      'download',
+      `chesspath-backup-${new Date().toISOString().slice(0, 10)}.json`
+    );
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -204,9 +239,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     storageService.saveSettings(updated);
     onUpdateSettings(updated);
     setVoiceTestStatus(null);
+    setApiTestStatus(null);
   };
 
-  const handleTestEdgeVoice = async () => {
+  const handleTestApiConnection = async () => {
+    setIsTestingApi(true);
+    setApiTestStatus(null);
+    try {
+      const res = await geminiService.testProviderConnection({
+        provider: localSettings.aiProvider,
+        apiKey: localSettings.aiApiKey || localSettings.geminiApiKey,
+      });
+      if (res.success) {
+        setApiTestStatus({
+          type: 'success',
+          message: res.reply || 'API connection verified!',
+        });
+      } else {
+        setApiTestStatus({
+          type: 'error',
+          message: res.error || 'API connection test failed.',
+        });
+      }
+    } catch (e: any) {
+      setApiTestStatus({
+        type: 'error',
+        message: e?.message || 'API connection test failed.',
+      });
+    } finally {
+      setIsTestingApi(false);
+    }
+  };
+
+  const handleTestMicrophone = async () => {
+    setIsTestingMic(true);
+    setMicTestStatus({
+      type: 'info',
+      message: 'Recording from microphone for 3 seconds... Speak a chess question!',
+    });
+    try {
+      const res = await speechService.testMicrophone(
+        localSettings.aiApiKey || localSettings.geminiApiKey
+      );
+      if (res.success) {
+        setMicTestStatus({
+          type: 'success',
+          message: `Transcribed: "${res.transcript || '(empty)'}"`,
+        });
+      } else {
+        setMicTestStatus({
+          type: 'error',
+          message: res.error || 'Microphone transcription failed.',
+        });
+      }
+    } catch (e: any) {
+      setMicTestStatus({
+        type: 'error',
+        message: e?.message || 'Microphone test failed.',
+      });
+    } finally {
+      setIsTestingMic(false);
+    }
+  };
+
+  const handleTestVoice = async () => {
     if (isSpeaking) {
       speechService.stop();
       setIsSpeaking(false);
@@ -221,16 +317,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     });
 
     try {
+      const hasHttpsProxy = isValidHttpsProxyUrl(localSettings.voiceProxyUrl);
       const currentEngine: TTSEngineType =
-        localSettings.ttsEngine || (localSettings.useNaturalVoice === false ? 'browser' : 'edge');
-      const currentVoice = localSettings.edgeVoice || 'en-US-AndrewNeural';
+        localSettings.ttsEngine === 'edge' && !hasHttpsProxy
+          ? 'gemini'
+          : localSettings.ttsEngine || 'gemini';
+      const currentGeminiVoice = localSettings.geminiVoice || 'Kore';
+      const currentEdgeVoice = localSettings.edgeVoice || 'en-US-AndrewNeural';
 
       const res = await speak(
         "Hello! I am your chess coach. Let's analyze the board and find the strongest plan.",
         true,
         {
           ttsEngine: currentEngine,
-          edgeVoice: currentVoice,
+          geminiVoice: currentGeminiVoice,
+          edgeVoice: currentEdgeVoice,
+          voiceProxyUrl: localSettings.voiceProxyUrl || '',
           rate: localSettings.voiceRate,
           volume: localSettings.voiceVolume,
           onStart: () => {
@@ -239,8 +341,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             setVoiceTestStatus({
               type: 'success',
               message:
-                currentEngine === 'edge'
-                  ? `Playing Edge Neural Voice (${currentVoice})...`
+                currentEngine === 'gemini'
+                  ? `Playing Gemini TTS (${currentGeminiVoice})...`
+                  : currentEngine === 'edge'
+                  ? `Playing Edge Neural Voice (${currentEdgeVoice})...`
                   : 'Playing Standard Device TTS...',
             });
           },
@@ -258,11 +362,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       );
 
       setIsTestingVoice(false);
-      if (!res.success) {
+      if (res.proxyWarning) {
+        setVoiceTestStatus({
+          type: res.success ? 'info' : 'error',
+          message: res.proxyWarning,
+        });
+      } else if (!res.success) {
         setIsSpeaking(false);
         setVoiceTestStatus({
           type: 'error',
-          message: 'Speech playback unavailable on this device.',
+          message: res.error || 'Speech playback unavailable.',
         });
       }
     } catch (err: any) {
@@ -277,8 +386,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
+  const hasValidHttpsProxy = isValidHttpsProxyUrl(localSettings.voiceProxyUrl);
   const activeTtsEngine: TTSEngineType =
-    localSettings.ttsEngine || (localSettings.useNaturalVoice === false ? 'browser' : 'edge');
+    localSettings.ttsEngine === 'edge' && !hasValidHttpsProxy
+      ? 'gemini'
+      : localSettings.ttsEngine || 'gemini';
   const activeApiKey = localSettings.aiApiKey || localSettings.geminiApiKey || '';
   const activeProvider = localSettings.aiProvider || 'auto';
   const detectedProvider = detectApiKeyProvider(activeApiKey, activeProvider);
@@ -309,7 +421,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Scrollable Content */}
         <div className="p-4 space-y-4 overflow-y-auto flex-1 text-slate-200 text-sm">
-          {/* Coach Voice & AI Settings Section (Direct Two-Column Grid Layout) */}
+          {/* Coach Voice & AI Settings Section */}
           <section className="space-y-3">
             <div className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl">
               <div className="flex items-center gap-2 text-sm font-semibold text-amber-400">
@@ -321,7 +433,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div>
                   <span className="block text-xs font-semibold text-slate-100">Coach Voice Output</span>
                   <span className="block text-[11px] font-normal text-slate-400">
-                    {localSettings.voiceEnabled ? 'Active — Coach speaks feedback aloud' : 'Muted — Text commentary only'}
+                    {localSettings.voiceEnabled
+                      ? 'Active — Coach speaks feedback aloud'
+                      : 'Muted — Text commentary only'}
                   </span>
                 </div>
               </div>
@@ -369,7 +483,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </label>
                   <select
                     value={localSettings.coachPersonality || 'strict'}
-                    onChange={(e) => handleChange('coachPersonality', e.target.value as CoachPersonality)}
+                    onChange={(e) =>
+                      handleChange('coachPersonality', e.target.value as CoachPersonality)
+                    }
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                   >
                     <option value="strict">Strict Grandmaster — Direct precision</option>
@@ -392,28 +508,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onChange={(e) => handleChange('ttsEngine', e.target.value as TTSEngineType)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                   >
-                    <option value="edge">Edge Neural TTS (Natural Coach Voice)</option>
-                    <option value="browser">Standard Device TTS (100% Offline)</option>
+                    <option value="gemini">Gemini TTS (Official API — Default)</option>
+                    <option value="browser">Standard Device TTS (Offline)</option>
+                    {hasValidHttpsProxy && (
+                      <option value="edge">Edge Neural TTS (Custom HTTPS Proxy)</option>
+                    )}
                   </select>
                 </div>
 
                 <div className="space-y-1">
                   <label className="text-slate-300 font-semibold block">Coach Voice</label>
                   <div className="flex items-center gap-1.5">
-                    <select
-                      value={localSettings.edgeVoice || 'en-US-AndrewNeural'}
-                      onChange={(e) => handleChange('edgeVoice', e.target.value)}
-                      className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
-                    >
-                      {EDGE_NEURAL_VOICES.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.label}
-                        </option>
-                      ))}
-                    </select>
+                    {activeTtsEngine === 'edge' && hasValidHttpsProxy ? (
+                      <select
+                        value={localSettings.edgeVoice || 'en-US-AndrewNeural'}
+                        onChange={(e) => handleChange('edgeVoice', e.target.value)}
+                        className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
+                      >
+                        {EDGE_NEURAL_VOICES.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <select
+                        value={localSettings.geminiVoice || 'Kore'}
+                        onChange={(e) => handleChange('geminiVoice', e.target.value)}
+                        disabled={activeTtsEngine === 'browser'}
+                        className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500 disabled:opacity-50"
+                      >
+                        {GEMINI_PREBUILT_VOICES.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
                     <button
                       type="button"
-                      onClick={handleTestEdgeVoice}
+                      onClick={handleTestVoice}
                       disabled={isTestingVoice}
                       className="px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 rounded-lg text-xs font-semibold shadow-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
                     >
@@ -428,6 +563,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
                 </div>
+              </div>
+
+              {/* Optional HTTPS Voice Proxy URL */}
+              <div className="space-y-1 pt-1">
+                <label className="text-slate-300 font-semibold flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Voice proxy URL (Optional — HTTPS only for Edge Neural TTS)</span>
+                  </span>
+                  {hasValidHttpsProxy && (
+                    <span className="text-[10px] text-emerald-400 font-normal">
+                      HTTPS Proxy Active
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="url"
+                  value={localSettings.voiceProxyUrl || ''}
+                  onChange={(e) => handleChange('voiceProxyUrl', e.target.value)}
+                  placeholder="https://your-edge-tts-proxy.example.com/tts (Leave blank to use Gemini TTS)"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
+                />
+                {localSettings.voiceProxyUrl && !hasValidHttpsProxy && (
+                  <p className="text-[11px] text-rose-400">
+                    Must be a full https:// URL. Edge Neural TTS is hidden until a valid https:// proxy URL is entered.
+                  </p>
+                )}
               </div>
 
               {/* Rate & Volume Sliders */}
@@ -484,6 +646,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </>
                   )}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={handleTestMicrophone}
+                  disabled={isTestingMic}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  {isTestingMic ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                      <span>Recording 3s...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Radio className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Test STT (3s Audio)</span>
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* Sample Move Test Readout */}
@@ -493,19 +674,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Bot className="w-4 h-4" />
                     <span>Live Coach Sample Move Test Result:</span>
                   </div>
-                  {sampleMoveResult.error ? (
-                    <div className="text-rose-400">Error: {sampleMoveResult.error}</div>
-                  ) : (
-                    <>
-                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Engine facts:</span> {sampleMoveResult.engineFacts}</div>
-                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Generated text:</span> "{sampleMoveResult.generatedText}"</div>
-                      <div className="text-slate-300"><span className="text-slate-400 font-medium">Time to first audio:</span> {sampleMoveResult.timeToFirstAudioMs} ms</div>
-                    </>
+                  <div className="text-slate-300">
+                    <span className="text-slate-400 font-medium">Engine facts:</span>{' '}
+                    {sampleMoveResult.engineFacts}
+                  </div>
+                  <div className="text-slate-300">
+                    <span className="text-slate-400 font-medium">Generated text:</span> "
+                    {sampleMoveResult.generatedText}"
+                  </div>
+                  <div className="text-slate-300">
+                    <span className="text-slate-400 font-medium">Time to first audio:</span>{' '}
+                    {sampleMoveResult.timeToFirstAudioMs} ms
+                  </div>
+                  {sampleMoveResult.error && (
+                    <div className="text-rose-400">Voice note: {sampleMoveResult.error}</div>
                   )}
                 </div>
               )}
 
-              {/* Test Result Toast */}
+              {/* Mic Test Status */}
+              {micTestStatus && (
+                <div
+                  className={`p-2.5 rounded-lg text-xs flex items-start gap-2 border ${
+                    micTestStatus.type === 'error'
+                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                      : micTestStatus.type === 'success'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                  }`}
+                >
+                  <div className="flex-1 leading-snug">{micTestStatus.message}</div>
+                </div>
+              )}
+
+              {/* Voice Test Result Toast */}
               {voiceTestStatus && (
                 <div
                   className={`p-2.5 rounded-lg text-xs flex items-start gap-2 border ${
@@ -545,7 +747,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               >
                 {detectedProvider.provider !== 'none'
                   ? `Active: ${detectedProvider.label}`
-                  : 'Using Built-in Environment Key / Offline Heuristics'}
+                  : 'Offline Heuristics (No API Key)'}
               </span>
             </div>
 
@@ -553,7 +755,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <select
                   value={activeProvider}
-                  onChange={(e) => handleChange('aiProvider', e.target.value as AppSettings['aiProvider'])}
+                  onChange={(e) =>
+                    handleChange('aiProvider', e.target.value as AppSettings['aiProvider'])
+                  }
                   className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                   title="AI Provider"
                 >
@@ -566,26 +770,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <option value="xai">xAI Grok</option>
                 </select>
 
-                <div className="relative sm:col-span-2">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={activeApiKey}
-                    onChange={(e) => handleApiKeyChange(e.target.value)}
-                    placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-10 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
-                  />
+                <div className="relative sm:col-span-2 flex gap-1.5">
+                  <div className="relative flex-1">
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      value={activeApiKey}
+                      onChange={(e) => handleApiKeyChange(e.target.value)}
+                      placeholder="Paste Gemini (AIza...), Groq (gsk_...), OpenAI (sk-...), Claude, or OpenRouter key"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 pr-9 text-slate-100 placeholder-slate-500 text-xs font-mono focus:outline-hidden focus:border-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                    >
+                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                    onClick={handleTestApiConnection}
+                    disabled={isTestingApi}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-semibold shrink-0 transition-colors cursor-pointer"
                   >
-                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    {isTestingApi ? 'Testing...' : 'Test Key'}
                   </button>
                 </div>
               </div>
+
+              {apiTestStatus && (
+                <div
+                  className={`p-2 rounded-lg text-xs border ${
+                    apiTestStatus.type === 'success'
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  {apiTestStatus.message}
+                </div>
+              )}
+
               <p className="text-[11px] text-slate-400 flex items-center gap-1 leading-relaxed">
                 <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Supports Auto-Detect or explicit provider selection (Gemini, Groq, OpenAI, Claude, OpenRouter, xAI). Stored locally on your device.</span>
+                <span>
+                  Your API key is stored only in your browser/device localStorage and used directly for Gemini TTS, STT, and Coach chat.
+                </span>
               </p>
             </div>
           </section>
@@ -663,7 +893,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : 'bg-slate-800 border-slate-700 text-slate-400'
                 }`}
               >
-                {localSettings.soundEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                {localSettings.soundEnabled ? (
+                  <Volume2 className="w-3.5 h-3.5" />
+                ) : (
+                  <VolumeX className="w-3.5 h-3.5" />
+                )}
                 {localSettings.soundEnabled ? 'Enabled' : 'Muted'}
               </button>
             </div>
@@ -709,7 +943,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <div className="bg-slate-950/60 rounded-xl border border-slate-800 p-3 text-xs space-y-2">
               {getMoveTimingLogs().length === 0 ? (
-                <p className="text-slate-400 text-xs italic">No moves recorded yet in this session. Play a move in a game to see Stockfish, text generation, and Edge Neural TTS latencies.</p>
+                <p className="text-slate-400 text-xs italic">
+                  No moves recorded yet in this session. Play a move in a game to see Stockfish, text generation, and TTS latencies.
+                </p>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left font-mono text-[11px]">
@@ -726,11 +962,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {getMoveTimingLogs().map((entry, idx) => (
                         <tr key={idx} className="text-slate-200">
                           <td className="py-1.5 font-semibold text-amber-300">
-                            {entry.moveSan} <span className="text-[10px] text-slate-400">({entry.mover})</span>
+                            {entry.moveSan}{' '}
+                            <span className="text-[10px] text-slate-400">({entry.mover})</span>
                           </td>
                           <td className="py-1.5 text-emerald-400">{entry.engineMs} ms</td>
                           <td className="py-1.5 text-sky-400">{entry.textGenMs} ms</td>
-                          <td className="py-1.5 text-indigo-400">{entry.timeToFirstAudioMs ? `${entry.timeToFirstAudioMs} ms` : '-'}</td>
+                          <td className="py-1.5 text-indigo-400">
+                            {entry.timeToFirstAudioMs ? `${entry.timeToFirstAudioMs} ms` : '-'}
+                          </td>
                           <td className="py-1.5 font-bold text-amber-400">{entry.totalMs} ms</td>
                         </tr>
                       ))}

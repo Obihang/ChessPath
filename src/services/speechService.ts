@@ -1,18 +1,19 @@
 /**
- * Speech service providing unified Text-to-Speech (TTS) dispatching with Edge Neural TTS,
- * phonetic chess notation parsing, and browser speech synthesis fallback.
- * Gemini API is NOT used for TTS.
+ * Speech service providing unified Text-to-Speech (TTS) dispatching:
+ * - Default: Gemini TTS (@google/genai with PCM trim/fade pipeline and IndexedDB caching)
+ * - Optional: Edge Neural TTS via user-configured HTTPS Voice Proxy URL (falls back to Gemini TTS with exact error if proxy fails)
+ * - Offline option: Browser SpeechSynthesis
  */
 
 import { AppSettings } from '../types/chess';
 import { geminiService, getGeminiVoiceApiKey } from './geminiService';
 import { soundService } from './audioService';
+import { audioCacheService } from './audioCacheService';
+import { isValidHttpsProxyUrl } from './storageService';
 import {
   formatChessTextForSpeech,
-  speak as speakWithEdgeOrBrowser,
+  speak as dispatchSpeak,
   stopSpeech,
-  synthesizeEdgeNeuralAudio,
-  findNativeEdgeNeuralVoice,
 } from '../utils/voice';
 
 export function convertChessNotationToSpokenText(text: string): string {
@@ -33,6 +34,7 @@ export interface SpeechDispatchResult {
   usedNatural: boolean;
   timeToFirstAudioMs?: number;
   error?: string;
+  proxyWarning?: string;
   errorType?: SpeechErrorType;
 }
 
@@ -118,9 +120,6 @@ class SpeechService {
     return this.isSpeakingState;
   }
 
-  /**
-   * Stops all active audio playback cleanly across Web Audio, Edge Neural HTMLAudioElement, and browser speech synthesis.
-   */
   public stop(reason: string = 'User requested stop') {
     soundService.stopActiveSpeech(40);
     stopSpeech();
@@ -128,18 +127,14 @@ class SpeechService {
     this.logDiagnostic('info', `Stopped active audio playback smoothly (${reason}).`);
   }
 
-  /**
-   * Standard Device TTS (100% Offline) using browser's SpeechSynthesis API.
-   */
   public async speakWithBrowserSpeech(
     text: string,
     settings: AppSettings,
     options: SpeechDispatchOptions = {}
   ): Promise<SpeechDispatchResult> {
     const callStartTime = Date.now();
-    const res = await speakWithEdgeOrBrowser(text, true, {
+    const res = await dispatchSpeak(text, true, {
       ttsEngine: 'browser',
-      edgeVoice: settings.edgeVoice || 'en-US-AndrewNeural',
       rate: settings.voiceRate,
       volume: settings.voiceVolume,
       onStart: () => {
@@ -165,13 +160,18 @@ class SpeechService {
       success: res.success,
       usedNatural: false,
       timeToFirstAudioMs: Date.now() - callStartTime,
-      ...(res.success ? {} : { error: 'Browser speech synthesis unavailable', errorType: 'unsupported_browser_speech' }),
+      ...(res.success
+        ? {}
+        : {
+            error: res.error || 'Browser speech synthesis unavailable',
+            errorType: 'unsupported_browser_speech',
+          }),
     };
   }
 
   /**
    * Plays instant cached verdict phrase ("Great move.", "Good move.", "Inaccuracy.", "Mistake.", "Blunder.")
-   * using Edge Neural TTS cache or native neural voice.
+   * using IndexedDB cached Gemini TTS or active speech engine.
    */
   public async speakVerdictInstant(
     classification: 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' | 'unavailable',
@@ -199,47 +199,44 @@ class SpeechService {
   }
 
   /**
-   * Pre-warms short verdict clips into the Edge Neural in-memory ObjectURL cache.
+   * Pre-generates and caches short verdict phrases in IndexedDB when Gemini TTS is active and a Gemini key is configured.
    */
   public async pregenerateVerdictPhrases(settings: AppSettings): Promise<void> {
     if (!settings.voiceEnabled) return;
-    const engine = settings.ttsEngine || (settings.useNaturalVoice ? 'edge' : 'browser');
-    if (engine !== 'edge') return;
+    if (settings.ttsEngine !== 'gemini') return;
+    if (!geminiService.hasGeminiVoiceKey()) return;
 
-    const edgeVoice = settings.edgeVoice || 'en-US-AndrewNeural';
-    if (findNativeEdgeNeuralVoice(edgeVoice)) {
-      // Native Microsoft Natural voice is installed in browser; zero-latency without network pre-fetch
-      return;
-    }
-
-    const phrases = ['Great move.', 'Good move.', 'Inaccuracy.', 'Mistake.', 'Blunder.'];
-    for (const phrase of phrases) {
-      try {
-        await synthesizeEdgeNeuralAudio(phrase, edgeVoice, settings.voiceRate || 1.0);
-      } catch {
-        // Ignore offline/network errors during background warm-up
-      }
-    }
+    const voice = settings.geminiVoice || 'Kore';
+    await audioCacheService.pregenerateVerdictPhrases(voice, (phrase) =>
+      geminiService.generateSpeech(phrase, voice)
+    );
   }
 
   /**
    * Universal Speech Dispatcher:
    * Single entrypoint for all coach speech (chat drawer, live coach, hint requests, sample move).
-   * Uses Edge Neural TTS when ttsEngine === 'edge' (with graceful fallback to local browser speech),
-   * or Standard Device TTS when ttsEngine === 'browser'.
    */
   public async speakWithCoach(
     text: string,
     settings: AppSettings,
     options: SpeechDispatchOptions = {}
   ): Promise<SpeechDispatchResult> {
-    const engine = settings.ttsEngine || (settings.useNaturalVoice === false ? 'browser' : 'edge');
-    const edgeVoice = settings.edgeVoice || settings.geminiVoice || 'en-US-AndrewNeural';
+    const hasProxy = isValidHttpsProxyUrl(settings.voiceProxyUrl);
+    const engine =
+      settings.ttsEngine === 'edge' && !hasProxy
+        ? 'gemini'
+        : settings.ttsEngine || 'gemini';
+    const voiceLabel =
+      engine === 'edge'
+        ? settings.edgeVoice || 'en-US-AndrewNeural'
+        : engine === 'gemini'
+        ? settings.geminiVoice || 'Kore'
+        : 'Browser Default';
 
     this.logDiagnostic('trigger', `speakWithCoach invoked: "${text.slice(0, 50)}..."`, {
       voiceEnabled: settings.voiceEnabled,
       ttsEngine: engine,
-      edgeVoice,
+      voice: voiceLabel,
     });
 
     if (!settings.voiceEnabled) {
@@ -260,9 +257,11 @@ class SpeechService {
     const callStartTime = Date.now();
     let firstAudioMs = 0;
 
-    const result = await speakWithEdgeOrBrowser(text, true, {
+    const result = await dispatchSpeak(text, true, {
       ttsEngine: engine,
-      edgeVoice,
+      geminiVoice: settings.geminiVoice || 'Kore',
+      edgeVoice: settings.edgeVoice || 'en-US-AndrewNeural',
+      voiceProxyUrl: settings.voiceProxyUrl || '',
       rate: settings.voiceRate,
       volume: settings.voiceVolume,
       onStart: () => {
@@ -270,7 +269,10 @@ class SpeechService {
         firstAudioMs = Date.now() - callStartTime;
         options.onFirstAudio?.(firstAudioMs);
         options.onStart?.();
-        this.logDiagnostic('start', `Coach speech playback started (${engine}: ${edgeVoice}) in ${firstAudioMs} ms.`);
+        this.logDiagnostic(
+          'start',
+          `Coach speech playback started (${engine}: ${voiceLabel}) in ${firstAudioMs} ms.`
+        );
       },
       onEnd: () => {
         this.isSpeakingState = false;
@@ -284,11 +286,21 @@ class SpeechService {
       },
     });
 
+    if (result.proxyWarning) {
+      this.logDiagnostic('warn', result.proxyWarning);
+    }
+
     return {
       success: result.success,
-      usedNatural: result.usedEdgeNeural,
+      usedNatural: result.usedNatural,
       timeToFirstAudioMs: firstAudioMs || Date.now() - callStartTime,
-      ...(result.success ? {} : { error: 'Speech playback unavailable on this device', errorType: 'unsupported_browser_speech' }),
+      ...(result.proxyWarning ? { proxyWarning: result.proxyWarning } : {}),
+      ...(result.success
+        ? {}
+        : {
+            error: result.error || 'Speech playback failed.',
+            errorType: result.error?.includes('API key') ? 'missing_key' : 'api_failure',
+          }),
     };
   }
 

@@ -17,12 +17,19 @@ interface TopBarProps {
 export const TopBar: React.FC<TopBarProps> = ({
   soundEnabled,
   voiceEnabled = true,
-  ttsEngine = 'edge',
+  ttsEngine = 'gemini',
   onToggleSound,
   onToggleVoice,
   onOpenSettings,
   onOpenCoach,
 }) => {
+  const engineLabel =
+    ttsEngine === 'gemini'
+      ? 'Gemini TTS'
+      : ttsEngine === 'edge'
+      ? 'Edge Proxy'
+      : 'Offline TTS';
+
   return (
     <header className="sticky top-0 z-30 w-full bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80">
       <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -37,7 +44,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             </span>
             <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/25">
               <GraduationCap className="w-3 h-3" />
-              <span>{ttsEngine === 'edge' ? 'Edge Neural' : 'Offline TTS'}</span>
+              <span>{engineLabel}</span>
             </span>
           </div>
         </div>

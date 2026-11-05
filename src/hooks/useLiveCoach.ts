@@ -7,8 +7,12 @@ import {
   CommentaryResult,
   recordMoveTiming,
 } from '../services/coachCommentaryService';
-import { generateCommentary } from '../services/commentaryService';
-import { analyzeMoveWithAI, buildFallbackMoveComment, detectApiKeyProvider } from '../services/coachService';
+import {
+  analyzeMoveWithAI,
+  buildFallbackMoveComment,
+  detectApiKeyProvider,
+  generateCommentary,
+} from '../services/coachService';
 import { speechService } from '../services/speechService';
 
 export interface MoveAnalysisRecord {
