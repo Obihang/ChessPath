@@ -8,7 +8,7 @@ import {
   recordMoveTiming,
 } from '../services/coachCommentaryService';
 import { generateCommentary } from '../services/commentaryService';
-import { analyzeMoveWithAI, detectApiKeyProvider } from '../services/coachService';
+import { analyzeMoveWithAI, buildFallbackMoveComment, detectApiKeyProvider } from '../services/coachService';
 import { speechService } from '../services/speechService';
 
 export interface MoveAnalysisRecord {
@@ -158,26 +158,34 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           return;
         }
 
-        // 2. Compute local heuristic commentary with personality and verbosity
-        const whiteEvalBefore =
+        // 2. Compute local heuristic commentary with personality and verbosity (convert centipawns to pawns!)
+        const whiteEvalBeforeCp =
           facts.evalBefore !== null
             ? facts.moverColor === 'w'
               ? facts.evalBefore
               : -facts.evalBefore
             : 0;
-        const whiteEvalAfter =
+        const whiteEvalAfterCp =
           facts.evalAfter !== null
             ? facts.moverColor === 'w'
               ? facts.evalAfter
               : -facts.evalAfter
             : 0;
 
+        const whiteEvalBeforePawns = Number((whiteEvalBeforeCp / 100).toFixed(2));
+        const whiteEvalAfterPawns = Number((whiteEvalAfterCp / 100).toFixed(2));
+        const dropCp =
+          facts.cpLoss !== null
+            ? facts.cpLoss
+            : Math.max(0, (facts.evalBefore ?? 0) - (facts.evalAfter ?? 0));
+        const evalDropPawns = Number((Math.max(0, dropCp) / 100).toFixed(2));
+
         const localCommentary = generateCommentary(
           currentFen,
           previousFen,
           move.san,
-          whiteEvalAfter,
-          whiteEvalBefore,
+          whiteEvalAfterPawns,
+          whiteEvalBeforePawns,
           facts.bestMoveUci,
           verbosity,
           personality
@@ -187,6 +195,19 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           facts.classification !== 'unavailable'
             ? facts.classification
             : localCommentary.classification;
+
+        const fallbackComment =
+          buildFallbackMoveComment(
+            {
+              moveSan: move.san,
+              classification: effectiveClassification,
+              evalDrop: evalDropPawns,
+              bestMoveSan: facts.bestMoveSan || localCommentary.bestMoveSan,
+              tacticalReasons: localCommentary.tacticalReasons,
+            },
+            verbosity,
+            personality
+          ) || localCommentary.text;
 
         const isCriticalOrTactical =
           effectiveClassification === 'inaccuracy' ||
@@ -227,7 +248,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           ? move.san.includes('#')
             ? `Checkmate with ${move.san}! Review the critical turning points to see how the attack developed.`
             : `Game over after ${move.san}.`
-          : localCommentary.text;
+          : fallbackComment;
         let usedSource: 'gemini' | 'template' = 'template';
 
         const detectedProvider = detectApiKeyProvider(settings.aiApiKey || settings.geminiApiKey);
@@ -243,7 +264,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
               prevFen: previousFen,
               moveSan: move.san,
               classification: effectiveClassification,
-              evalDrop: localCommentary.evalDrop,
+              evalDrop: evalDropPawns,
               bestMoveSan: facts.bestMoveSan || localCommentary.bestMoveSan,
               tacticalReasons: localCommentary.tacticalReasons,
               verbosity,
@@ -260,7 +281,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
               usedSource = 'gemini';
             }
           } catch {
-            finalComment = localCommentary.text;
+            finalComment = fallbackComment;
           }
         }
 

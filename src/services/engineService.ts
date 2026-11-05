@@ -563,9 +563,16 @@ export class ChessEngineService {
   private uciController: StockfishUciController;
   private lastEngineUsed: EngineSource = 'stockfish';
   private fallbackCount: number = 0;
+  private taskQueue: Promise<any> = Promise.resolve();
 
   constructor() {
     this.uciController = new StockfishUciController();
+  }
+
+  private enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.taskQueue.then(task, task);
+    this.taskQueue = next.catch(() => {});
+    return next;
   }
 
   public getStatus(): EngineStatusInfo {
@@ -583,15 +590,27 @@ export class ChessEngineService {
     return this.lastEngineUsed;
   }
 
+  public async evaluatePosition(
+    fen: string,
+    ms: number = 250
+  ): Promise<EngineEvaluationResult> {
+    return this.evaluate(fen, ms);
+  }
+
   /**
    * Evaluates the given FEN position.
-   * Returns an honest EngineEvaluationResult:
-   * - Never reports score 0 when Stockfish is unavailable or times out.
-   * - Distinguishes available evaluations from unavailable evaluations.
-   * - Score perspective: centipawns relative to the side whose turn it is to move in the FEN.
-   *   (Positive = side to move is ahead; Negative = side to move is behind).
+   * Serialized via this.enqueue to prevent overlapping UCI message handlers.
    */
-  public async evaluate(
+  public evaluate(
+    fen: string,
+    ms: number = 250
+  ): Promise<EngineEvaluationResult> {
+    return this.enqueue(async () => {
+      return this.evaluateInternal(fen, ms);
+    });
+  }
+
+  private async evaluateInternal(
     fen: string,
     ms: number = 250
   ): Promise<EngineEvaluationResult> {
@@ -742,9 +761,19 @@ export class ChessEngineService {
 
   /**
    * Computes the best move for the given FEN according to the selected difficulty.
-   * Validates move legality strictly against chess.js.
+   * Serialized via this.enqueue and validates move legality strictly against chess.js.
    */
-  public async getBestMove(
+  public getBestMove(
+    fen: string,
+    difficulty: EngineDifficulty = ENGINE_DIFFICULTIES.intermediate,
+    skipBlunder: boolean = false
+  ): Promise<EngineMoveResult> {
+    return this.enqueue(async () => {
+      return this.getBestMoveInternal(fen, difficulty, skipBlunder);
+    });
+  }
+
+  private async getBestMoveInternal(
     fen: string,
     difficulty: EngineDifficulty = ENGINE_DIFFICULTIES.intermediate,
     skipBlunder: boolean = false

@@ -114,8 +114,8 @@ function getSavedProviderOverride(): string {
 }
 
 /**
- * Automatically detects the AI provider, label, and default fast model from an API key prefix,
- * or uses the server-backed Google Gemini provider by default so the app works for everyone who opens it.
+ * Automatically detects the AI provider, label, and default fast model from an API key prefix.
+ * Only activates when the user has configured an API key in Settings, avoiding failed proxy calls when unconfigured.
  */
 export function detectApiKeyProvider(
   rawKey?: string,
@@ -128,8 +128,12 @@ export function detectApiKeyProvider(
   const key = getResolvedAiApiKey(rawKey);
   const chosenProvider = explicitProvider || getSavedProviderOverride();
 
-  if (chosenProvider === 'gemini') {
-    return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
+  if (!key) {
+    return {
+      provider: 'none',
+      label: 'Local Stockfish Coach (No API Key)',
+      model: 'stockfish-19-local',
+    };
   }
 
   if (
@@ -137,9 +141,6 @@ export function detectApiKeyProvider(
     chosenProvider !== 'auto' &&
     chosenProvider in PROVIDER_PRESETS
   ) {
-    if (!key) {
-      return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
-    }
     const preset = PROVIDER_PRESETS[chosenProvider as Exclude<SmartAIProvider, 'none'>];
     return {
       provider: chosenProvider as SmartAIProvider,
@@ -148,7 +149,7 @@ export function detectApiKeyProvider(
     };
   }
 
-  if (!key || key.startsWith('AIza')) {
+  if (key.startsWith('AIza')) {
     return { provider: 'gemini', ...PROVIDER_PRESETS.gemini };
   }
   if (key.startsWith('gsk_')) {
@@ -444,10 +445,131 @@ export interface AnalyzeMoveWithAIInput {
   personality?: CoachPersonality;
 }
 
+export function buildFallbackMoveComment(
+  facts: {
+    moveSan: string;
+    classification: string;
+    evalDrop?: number | null;
+    bestMoveSan?: string;
+    tacticalReasons?: string[];
+  },
+  verbosity: CoachVerbosity = 'detailed',
+  personality: CoachPersonality = 'strict'
+): string {
+  if (verbosity === 'silent') return '';
+
+  const activePersonality = getResolvedCoachPersonality(personality);
+  const { moveSan, classification, bestMoveSan, tacticalReasons = [] } = facts;
+  const rawDrop = typeof facts.evalDrop === 'number' ? Math.max(0, facts.evalDrop) : 0;
+  // Ensure evalDrop is in pawns (not centipawns)
+  const dropPawns = rawDrop > 15 ? Number((rawDrop / 100).toFixed(2)) : Number(rawDrop.toFixed(2));
+  const primaryReason =
+    tacticalReasons[0] || 'maintains piece coordination and central control';
+
+  const showExactBestMove = verbosity === 'verbose' && bestMoveSan && bestMoveSan !== moveSan;
+  const suggestionText = showExactBestMove
+    ? `You should have played ${bestMoveSan} instead.`
+    : bestMoveSan && bestMoveSan !== moveSan
+    ? bestMoveSan.includes('x')
+      ? 'Look for the active capture that wins material or relieves pressure.'
+      : bestMoveSan.includes('+')
+      ? 'Look for a forcing check that seizes the initiative.'
+      : 'Focus on active piece development and central control.'
+    : 'Keep your pieces coordinated and defended.';
+
+  let text = '';
+
+  if (classification === 'blunder') {
+    switch (activePersonality) {
+      case 'strict':
+        text = `Serious blunder with ${moveSan}! You dropped ${dropPawns.toFixed(1)} pawns of evaluation. ${suggestionText}`;
+        break;
+      case 'supportive':
+        text = `Careful—${moveSan} is a blunder that leaves a tactical opening. ${suggestionText}`;
+        break;
+      case 'aggressive':
+        text = `${moveSan} hands the attack straight to your opponent! ${suggestionText}`;
+        break;
+      case 'professor':
+        text = `${moveSan} is a critical oversight costing ${dropPawns.toFixed(1)} pawns in evaluation. ${suggestionText}`;
+        break;
+    }
+  } else if (classification === 'mistake') {
+    switch (activePersonality) {
+      case 'strict':
+        text = `Mistake with ${moveSan}. That concedes key squares and costs valuable tempo. ${suggestionText}`;
+        break;
+      case 'supportive':
+        text = `${moveSan} is a mistake here—there was a stronger way to coordinate your pieces. ${suggestionText}`;
+        break;
+      case 'aggressive':
+        text = `${moveSan} is too passive and lets your opponent seize the initiative! ${suggestionText}`;
+        break;
+      case 'professor':
+        text = `${moveSan} weakens your position and drops ${dropPawns.toFixed(1)} pawns. ${suggestionText}`;
+        break;
+    }
+  } else if (classification === 'inaccuracy') {
+    switch (activePersonality) {
+      case 'strict':
+        text = `Inaccurate play with ${moveSan}. Look for a sharper continuation. ${suggestionText}`;
+        break;
+      case 'supportive':
+        text = `${moveSan} is playable, though a slightly more accurate plan was available. ${suggestionText}`;
+        break;
+      case 'aggressive':
+        text = `${moveSan} misses a chance to put maximum pressure on your opponent. ${suggestionText}`;
+        break;
+      case 'professor':
+        text = `${moveSan} is a minor inaccuracy that concedes a small positional edge. ${suggestionText}`;
+        break;
+    }
+  } else if (classification === 'best' || classification === 'great' || classification === 'brilliant') {
+    switch (activePersonality) {
+      case 'strict':
+        text = `Accurate move with ${moveSan}. That matches the engine's top choice and ${primaryReason}.`;
+        break;
+      case 'supportive':
+        text = `Excellent find! ${moveSan} is the strongest move on the board and ${primaryReason}.`;
+        break;
+      case 'aggressive':
+        text = `Powerful play! ${moveSan} keeps maximum pressure on the board and ${primaryReason}.`;
+        break;
+      case 'professor':
+        text = `Principled execution with ${moveSan}, which ${primaryReason} and maintains optimal harmony.`;
+        break;
+    }
+  } else {
+    // 'good', 'book', or 'unavailable'
+    switch (activePersonality) {
+      case 'strict':
+        text = `Solid move ${moveSan}, which ${primaryReason}. Keep calculating forcing replies.`;
+        break;
+      case 'supportive':
+        text = `Good move! ${moveSan} ${primaryReason} and keeps your position healthy.`;
+        break;
+      case 'aggressive':
+        text = `Good move ${moveSan}—now look to build attacking momentum on the next turn.`;
+        break;
+      case 'professor':
+        text = `Sound positional choice with ${moveSan}, as it ${primaryReason}.`;
+        break;
+    }
+  }
+
+  if (verbosity === 'brief') {
+    const firstSentence = text.split(/(?<=[.!])\s+/)[0] || text;
+    return firstSentence;
+  }
+
+  return text;
+}
+
 /**
  * Fast, concise live coach reaction to a player's move that analyzes the move,
  * criticizes mistakes/blunders, and suggests the better plan or move according to
  * the chosen coachPersonality and coachVerbosity.
+ * Cleanly falls back to buildFallbackMoveComment if no API key is set or if the AI call fails.
  */
 export async function analyzeMoveWithAI({
   fen,
@@ -460,7 +582,28 @@ export async function analyzeMoveWithAI({
   verbosity = 'detailed',
   personality = 'strict',
 }: AnalyzeMoveWithAIInput): Promise<string> {
+  if (verbosity === 'silent') return '';
+
   const activePersonality = getResolvedCoachPersonality(personality);
+  const rawDrop = typeof evalDrop === 'number' ? Math.max(0, evalDrop) : 0;
+  const normalizedDropPawns = rawDrop > 15 ? Number((rawDrop / 100).toFixed(2)) : Number(rawDrop.toFixed(2));
+
+  const fallbackText = buildFallbackMoveComment(
+    {
+      moveSan,
+      classification,
+      evalDrop: normalizedDropPawns,
+      bestMoveSan,
+      tacticalReasons,
+    },
+    verbosity,
+    activePersonality
+  );
+
+  const detected = detectApiKeyProvider();
+  if (detected.provider === 'none') {
+    return fallbackText;
+  }
 
   const verbosityDescriptions: Record<CoachVerbosity, string> = {
     silent: 'Output nothing.',
@@ -472,8 +615,6 @@ export async function analyzeMoveWithAI({
       `Keep it to 2 sentences (max 50 words). Give a deep tactical and positional breakdown of ${moveSan}, explicitly naming the engine's best move (${bestMoveSan || 'the top engine line'}) and explaining why it is superior.`,
   };
 
-  if (verbosity === 'silent') return '';
-
   const spoilerRule =
     verbosity === 'verbose'
       ? `Explicitly name the best move (${bestMoveSan || 'the engine recommendation'}) and explain the concrete continuation.`
@@ -483,11 +624,12 @@ export async function analyzeMoveWithAI({
 ${verbosityDescriptions[verbosity]}
 Rules:
 - Output PLAIN SPOKEN TEXT ONLY (no markdown, no asterisks, no bullet points).
+- Strictly respect the move classification "${classification}"—never call a good or great move a blunder.
 - ${spoilerRule}`;
 
   const dropInfo =
     evalDrop !== undefined && evalDrop !== null
-      ? `Evaluation drop: ${typeof evalDrop === 'number' ? evalDrop.toFixed(2) : evalDrop} pawns.`
+      ? `Evaluation drop: ${normalizedDropPawns.toFixed(2)} pawns.`
       : '';
 
   const prompt = `Position before move (FEN): ${prevFen}
@@ -500,5 +642,10 @@ Tactical/positional notes: ${tacticalReasons.join('; ') || 'Standard positional 
 
 Give your live spoken reaction to ${moveSan}:`;
 
-  return await callSmartAI(prompt, systemInstruction);
+  try {
+    const aiReply = await callSmartAI(prompt, systemInstruction);
+    return aiReply || fallbackText;
+  } catch {
+    return fallbackText;
+  }
 }

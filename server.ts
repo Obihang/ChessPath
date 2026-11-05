@@ -7,8 +7,9 @@ import { GoogleGenAI, GenerateContentResponse } from '@google/genai';
 import WebSocket from 'ws';
 import {
   TRUSTED_CLIENT_TOKEN,
+  CHROMIUM_MAJOR_VERSION,
   SEC_MS_GEC_VERSION,
-  generateSecMsGecV2,
+  generateSecMsGec,
   generateMuid,
 } from './src/utils/edgeDrm';
 
@@ -16,6 +17,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
+
+const POLLY_VOICE_MAP: Record<string, string> = {
+  'en-US-AndrewNeural': 'Matthew',
+  'en-US-BrianNeural': 'Brian',
+  'en-GB-RyanNeural': 'Arthur',
+  'en-US-AriaNeural': 'Joanna',
+  'en-GB-SoniaNeural': 'Amy',
+};
 
 function getServerGeminiClient(): GoogleGenAI {
   return new GoogleGenAI({
@@ -31,7 +40,7 @@ function getServerGeminiClient(): GoogleGenAI {
 // --- Edge Neural TTS Helpers ---
 function synthesizeEdgeWebSocket(text: string, voice: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const secMsGec = generateSecMsGecV2();
+    const secMsGec = generateSecMsGec();
     const connectId = crypto.randomBytes(16).toString('hex');
     const muid = generateMuid();
     const wsUrl = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}&ConnectionId=${connectId}`;
@@ -45,7 +54,7 @@ function synthesizeEdgeWebSocket(text: string, voice: string): Promise<Buffer> {
         'Cache-Control': 'no-cache',
         'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
+          `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
         'Accept-Encoding': 'gzip, deflate, br, zstd',
         'Accept-Language': 'en-US,en;q=0.9',
         'Cookie': `muid=${muid};`,
@@ -66,8 +75,8 @@ function synthesizeEdgeWebSocket(text: string, voice: string): Promise<Buffer> {
     };
 
     const timer = setTimeout(() => {
-      finish(new Error('Edge TTS WebSocket timed out after 6000ms'));
-    }, 6000);
+      finish(new Error('Edge TTS WebSocket timed out after 4500ms'));
+    }, 4500);
 
     ws.on('open', () => {
       const langMatch = voice.match(/^[a-z]{2}-[A-Z]{2}/);
@@ -162,7 +171,25 @@ function splitTextIntoTtsChunks(text: string, maxLen = 180): string[] {
   return chunks.length > 0 ? chunks : [text.slice(0, maxLen)];
 }
 
-async function synthesizeFallbackMp3(text: string, voice: string): Promise<Buffer> {
+async function synthesizePollyFallbackMp3(text: string, voice: string): Promise<Buffer> {
+  const mappedVoice = POLLY_VOICE_MAP[voice] || (voice.startsWith('en-GB') ? 'Arthur' : 'Matthew');
+  const url = `https://api.streamelements.com/kappa/v2/speech?voice=${encodeURIComponent(mappedVoice)}&text=${encodeURIComponent(text)}`;
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`StreamElements TTS HTTP ${response.status}`);
+  }
+  const arrayBuf = await response.arrayBuffer();
+  if (arrayBuf.byteLength <= 100) {
+    throw new Error('StreamElements TTS returned empty audio');
+  }
+  return Buffer.from(arrayBuf);
+}
+
+async function synthesizeGoogleFallbackMp3(text: string, voice: string): Promise<Buffer> {
   const tl = voice.startsWith('en-GB') ? 'en-GB' : 'en-US';
   const chunks = splitTextIntoTtsChunks(text, 180);
   const buffers: Buffer[] = [];
@@ -204,24 +231,30 @@ async function startServer() {
     }
 
     let mp3Buffer: Buffer | null = null;
-    let ttsEngineUsed: 'edge-neural' | 'google-fallback' = 'edge-neural';
+    let ttsEngineUsed: 'edge-neural' | 'streamelements-polly' | 'google-fallback' = 'edge-neural';
 
-    for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const edgeBuf = await synthesizeEdgeWebSocket(text, voice);
+      if (edgeBuf && edgeBuf.length > 100) {
+        mp3Buffer = edgeBuf;
+        ttsEngineUsed = 'edge-neural';
+      }
+    } catch {
+      // Fall through to multi-voice neural fallback
+    }
+
+    if (!mp3Buffer) {
       try {
-        const edgeBuf = await synthesizeEdgeWebSocket(text, voice);
-        if (edgeBuf && edgeBuf.length > 100) {
-          mp3Buffer = edgeBuf;
-          ttsEngineUsed = 'edge-neural';
-          break;
-        }
+        mp3Buffer = await synthesizePollyFallbackMp3(text, voice);
+        ttsEngineUsed = 'streamelements-polly';
       } catch {
-        // Retry once on transient WebSocket error before falling back
+        // Fall through to Google GTX fallback
       }
     }
 
     if (!mp3Buffer) {
       try {
-        mp3Buffer = await synthesizeFallbackMp3(text, voice);
+        mp3Buffer = await synthesizeGoogleFallbackMp3(text, voice);
         ttsEngineUsed = 'google-fallback';
       } catch (err: any) {
         res.status(502).json({ error: err?.message || 'TTS synthesis failed' });

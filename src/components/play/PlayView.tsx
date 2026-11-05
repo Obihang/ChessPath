@@ -427,7 +427,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
     }
   };
 
-  // Analyze & comment on player move, then trigger computer reply once text analysis is ready (before speech finishes)
+  // Analyze & comment on player move in parallel while immediately triggering the computer reply
+  // (Stockfish UCI evaluations and best-move searches are safely serialized via engineService.enqueue)
   const analyzeAndCommentPlayerMove = async (
     userMoveRec: MoveRecord,
     prevFen: string,
@@ -437,7 +438,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
     ended: boolean
   ) => {
     setCustomArrow(null);
-    await processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
+    void processCoachMove(userMoveRec, prevFen, currentFen, true, currentSanList);
 
     if (mode === 'ai' && !ended && nextGame.turn() !== playerColor) {
       await triggerAiMove(nextGame);

@@ -104,13 +104,19 @@ export function generateCommentary(
 
   // Determine mover color from prevFen
   const moverColor = prevFen.split(' ')[1] === 'b' ? 'b' : 'w';
-  // evalBefore & evalAfter may be in pawns or centipawns; normalize to pawns from mover's perspective
-  const normBefore = Math.abs(evalBefore) > 25 ? evalBefore / 100 : evalBefore;
-  const normAfter = Math.abs(evalAfter) > 25 ? evalAfter / 100 : evalAfter;
+  // Normalize to pawns if centipawns were passed (e.g. integer centipawns like 20, 10 or values > 15)
+  const isLikelyCentipawns =
+    Math.abs(evalBefore) > 15 ||
+    Math.abs(evalAfter) > 15 ||
+    (Number.isInteger(evalBefore) &&
+      Number.isInteger(evalAfter) &&
+      (Math.abs(evalBefore) >= 4 || Math.abs(evalAfter) >= 4));
+  const normBefore = isLikelyCentipawns ? evalBefore / 100 : evalBefore;
+  const normAfter = isLikelyCentipawns ? evalAfter / 100 : evalAfter;
 
   const moverEvalBefore = moverColor === 'w' ? normBefore : -normBefore;
   const moverEvalAfter = moverColor === 'w' ? normAfter : -normAfter;
-  const evalDrop = Math.max(0, moverEvalBefore - moverEvalAfter);
+  const evalDrop = Number(Math.max(0, moverEvalBefore - moverEvalAfter).toFixed(2));
 
   const isBest = !!(bestMoveSan && bestMoveSan === moveSan);
   let classification: HeuristicClassification = 'good';
