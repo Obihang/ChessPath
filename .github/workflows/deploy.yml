@@ -40,10 +40,19 @@ jobs:
           npm run test:engine
           npm run test:coach
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Build static web app
-        run: npm run build
-        env:
-          VITE_BASE_PATH: /ChessPath/
+        run: |
+          BASE_PATH="${{ steps.pages.outputs.base_path }}"
+          if [ -z "$BASE_PATH" ]; then
+            BASE_PATH="/ChessPath/"
+          else
+            BASE_PATH="${BASE_PATH%/}/"
+          fi
+          VITE_BASE_PATH="$BASE_PATH" npm run build
 
       - name: Verify no /api/ backend routes exist in src or dist
         run: |
