@@ -38,7 +38,7 @@
 - **Position Explanations**: Evaluates the current board and explains ideas in plain English.
 - **Tactical Hints**: Nudges you in the right direction without spoiling the move.
 - **Post-Game Review**: Identifies mistakes and provides 2–3 key lessons.
-- **Dual-Tier Speech**: Web Speech API (`speechSynthesis`) offline by default + optional Gemini Natural Voice (`gemini-3.8-flash-lite-tts`).
+- **Dual-Tier Speech**: Web Speech API (`speechSynthesis`) offline by default + optional Gemini Natural Voice (`gemini-2.5-flash-preview-tts`).
 - **Phonetic Notation**: Converts chess notation to spoken English (e.g., *Nf3* $\rightarrow$ "knight to f3", *O-O* $\rightarrow$ "castles kingside", *exd5* $\rightarrow$ "pawn takes on d5").
 - **Voice Input**: Microphone button in chat using Web Speech recognition.
 

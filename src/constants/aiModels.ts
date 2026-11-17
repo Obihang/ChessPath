@@ -4,16 +4,16 @@
 
 export const GEMINI_MODELS = {
   // Basic & Complex Text Tasks
-  TEXT_PRIMARY: 'gemini-3.8-flash',
-  TEXT_FALLBACK: 'gemini-flash-latest',
+  TEXT_PRIMARY: 'gemini-2.5-flash',
+  TEXT_FALLBACK: 'gemini-2.5-flash-lite',
 
   // Audio Transcription (STT)
-  STT_PRIMARY: 'gemini-3.5-transcribe',
-  STT_FALLBACK: 'gemini-3.8-flash',
+  STT_PRIMARY: 'gemini-2.5-flash',
+  STT_FALLBACK: 'gemini-2.5-flash-lite',
 
   // Text-to-Speech (TTS)
-  TTS_PRIMARY: 'gemini-3.8-flash-lite-tts',
-  TTS_FALLBACK: 'gemini-2.5-flash-preview-tts',
+  TTS_PRIMARY: 'gemini-2.5-flash-preview-tts',
+  TTS_FALLBACK: 'gemini-2.5-pro-preview-tts',
 } as const;
 
 export interface VoiceOption {

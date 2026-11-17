@@ -25,8 +25,6 @@ export default defineConfig(({ command }) => {
           'pwa-maskable-512x512.png',
           'engine/stockfish-19-lite-single.js',
           'engine/stockfish-19-lite-single.wasm',
-          'engine/stockfish.js',
-          'engine/stockfish.wasm',
           'fonts/plus-jakarta-sans-latin.woff2',
           'fonts/jetbrains-mono-latin.woff2',
         ],
