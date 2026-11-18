@@ -330,7 +330,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
           coachCommentaryService.notifyListeners(commentaryResult);
           onCommentaryGenerated?.(commentaryResult);
 
-          // 4. Speak result immediately (Instant Local Voice by default, or HD Gemini TTS with fast local fallback)
+          // 4. Speak result via MS Edge Neural TTS (fails silently if offline/unavailable)
           if (settings.voiceEnabled && !isMuted && !controller.signal.aborted) {
             if (isPlayerMove) {
               isSpeakingPlayerMoveRef.current = true;
@@ -339,7 +339,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
             void speechService
               .speakWithCoach(finalComment, settings, {
                 signal: controller.signal,
-                allowLocalFallback: true,
                 onFirstAudio: (timeToFirst) => {
                   firstAudioMs = timeToFirst;
                 },
@@ -361,12 +360,6 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
                 isSpeakingPlayerMoveRef.current = false;
                 if (speechRes.timeToFirstAudioMs) {
                   firstAudioMs = speechRes.timeToFirstAudioMs;
-                }
-                if (!speechRes.success && speechRes.error) {
-                  setCurrentRecord((prev) => {
-                    if (!prev || prev.requestId !== currentRequestId) return prev;
-                    return { ...prev, error: `Voice failed: ${speechRes.error}` };
-                  });
                 }
                 const totalMs = Date.now() - moveStartTime;
                 recordMoveTiming({
@@ -442,7 +435,7 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
 
   const repeatComment = useCallback(() => {
     if (currentRecord?.comment && settings.voiceEnabled) {
-      speechService.speakWithCoach(currentRecord.comment, settings, { allowLocalFallback: true });
+      speechService.speakWithCoach(currentRecord.comment, settings);
     }
   }, [currentRecord, settings]);
 

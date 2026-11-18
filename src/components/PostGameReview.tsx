@@ -167,7 +167,6 @@ export const PostGameReview: React.FC<PostGameReviewProps> = ({
       setAiSummary(summary);
       if (settings.voiceEnabled) {
         speak(summary, false, {
-          ttsEngine: settings.ttsEngine,
           edgeVoice: settings.edgeVoice,
           rate: settings.voiceRate,
           volume: settings.voiceVolume,
@@ -326,7 +325,6 @@ export const PostGameReview: React.FC<PostGameReviewProps> = ({
                 <button
                   onClick={() =>
                     speak(aiSummary, true, {
-                      ttsEngine: settings.ttsEngine,
                       edgeVoice: settings.edgeVoice,
                       rate: settings.voiceRate,
                       volume: settings.voiceVolume,

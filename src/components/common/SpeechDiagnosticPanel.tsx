@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AppSettings } from '../../types/chess';
 import { speechService, SpeechDiagnosticEntry } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
+import { DEFAULT_EDGE_VOICE } from '../../constants/aiModels';
 import {
   Activity,
   Volume2,
@@ -57,7 +58,6 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
       "Hello! I am your chess coach. Let's find the best move together.",
       settings,
       {
-        allowLocalFallback: false,
         onStart: () => setIsTestingSpeech(true),
         onEnd: () => setIsTestingSpeech(false),
         onError: () => setIsTestingSpeech(false),
@@ -114,13 +114,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
   const isMuted = !settings.voiceEnabled;
   const isVolumeZero = settings.voiceVolume <= 0;
-  const activeEngine = settings.ttsEngine || 'browser';
-  const activeVoiceLabel =
-    activeEngine === 'gemini'
-      ? settings.geminiVoice || 'Kore'
-      : activeEngine === 'edge'
-      ? settings.edgeVoice || 'en-US-AndrewNeural'
-      : 'Instant Local Voice';
+  const activeVoiceLabel = settings.edgeVoice || DEFAULT_EDGE_VOICE;
 
   return (
     <div className="bg-slate-950/70 border border-slate-800 rounded-xl overflow-hidden text-xs">
@@ -159,16 +153,8 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
           </div>
         </div>
 
-        {/* Status Indicators Pill Bar */}
+        {/* Status Indicators Bar */}
         <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-          <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300 font-medium">
-            Engine:{' '}
-            {activeEngine === 'gemini'
-              ? 'HD Gemini TTS'
-              : activeEngine === 'edge'
-              ? 'Edge Neural Proxy'
-              : 'Instant Voice (Local)'}
-          </span>
 
           <span
             className={`px-2 py-0.5 rounded-full border font-medium ${

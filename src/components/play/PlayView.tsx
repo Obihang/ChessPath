@@ -137,11 +137,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
   const [customArrow, setCustomArrow] = useState<{ from: string; to: string; color?: string } | null>(null);
 
-  // Pre-generate verdict audio clips & precompute player turns
-  useEffect(() => {
-    speechService.pregenerateVerdictPhrases(settings).catch(() => {});
-  }, [settings.edgeVoice, settings.ttsEngine, settings.voiceEnabled]);
-
+  // Precompute player turns
   useEffect(() => {
     if (game && !gameResult && game.turn() === playerColor) {
       precomputeTurn(game.fen());
@@ -546,7 +542,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
       setLatestComment(hintText);
       if (settings.voiceEnabled) {
         speechService.stop('Hint requested');
-        speechService.speakWithCoach(hintText, settings, { allowLocalFallback: true });
+        speechService.speakWithCoach(hintText, settings);
       }
     } catch (e) {
       console.warn('Coach hint error:', e);
@@ -804,28 +800,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
               <option value="aggressive">Aggressive</option>
               <option value="professor">Professor</option>
             </select>
-
-            {/* Quick Voice Mode Toggle: Instant Local vs HD Gemini TTS */}
-            <button
-              type="button"
-              onClick={() => {
-                const nextEngine = settings.ttsEngine === 'gemini' ? 'browser' : 'gemini';
-                const updated = storageService.updateSetting('ttsEngine', nextEngine);
-                onUpdateSettings?.(updated);
-              }}
-              className={`px-2 py-1 rounded-lg border text-[10px] font-semibold transition-colors ${
-                settings.ttsEngine === 'gemini'
-                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
-                  : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-              }`}
-              title={
-                settings.ttsEngine === 'gemini'
-                  ? 'HD AI Voice (Gemini TTS — slower). Click for Instant Local Voice.'
-                  : 'Instant Voice (Local <250ms). Click for HD Gemini TTS.'
-              }
-            >
-              {settings.ttsEngine === 'gemini' ? 'HD Voice' : 'Instant Voice'}
-            </button>
 
             <button
               type="button"

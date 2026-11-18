@@ -1,12 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
-import { storageService, PROGRESS_KEY } from './storageService';
-import { GEMINI_MODELS, GEMINI_PREBUILT_VOICES } from '../constants/aiModels';
-import {
-  base64ToArrayBuffer,
-  stripMarkdown,
-  processRawPcmOrWavToProcessedWav,
-} from '../utils/audioUtils';
-import { audioCacheService } from './audioCacheService';
+import { storageService } from './storageService';
+import { GEMINI_MODELS } from '../constants/aiModels';
+import { base64ToArrayBuffer } from '../utils/audioUtils';
 import {
   detectApiKeyProvider,
   callSmartAI,
@@ -19,39 +14,6 @@ export { base64ToArrayBuffer };
 export function arrayBufferToBlobUrl(buffer: ArrayBuffer, mimeType: string = 'audio/wav'): string {
   const blob = new Blob([buffer], { type: mimeType });
   return URL.createObjectURL(blob);
-}
-
-/**
- * Resolves the user's Gemini API key strictly from localStorage (`chesspath_progress_v1` first, then `chesspath_settings_v1`).
- * Never reads process.env.
- */
-export function getGeminiVoiceApiKey(customKey?: string): string {
-  let progressKey = '';
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const raw = localStorage.getItem(PROGRESS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const k = parsed?.aiApiKey || parsed?.geminiApiKey;
-        if (k && typeof k === 'string') {
-          progressKey = k.trim();
-        }
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }
-
-  const settings = storageService.getSettings();
-  const rawKey = (
-    customKey ||
-    progressKey ||
-    settings.aiApiKey ||
-    settings.geminiApiKey ||
-    ''
-  ).trim();
-
-  return rawKey.replace(/^["'`]|["'`]$/g, '').trim();
 }
 
 export function getTextProviderApiKey(customKey?: string): string {
@@ -74,23 +36,9 @@ export function resetActiveTextModel(): void {
   rememberedTextModel = DEFAULT_TEXT_MODEL;
 }
 
-const VALID_GEMINI_VOICE_NAMES = new Set(GEMINI_PREBUILT_VOICES.map((v) => v.id));
-
-export function normalizeGeminiVoiceName(voiceName?: string): string {
-  if (voiceName && VALID_GEMINI_VOICE_NAMES.has(voiceName)) {
-    return voiceName;
-  }
-  return 'Kore';
-}
-
 export const geminiService = {
   hasKey(): boolean {
     return detectApiKeyProvider().provider !== 'none';
-  },
-
-  hasGeminiVoiceKey(customKey?: string): boolean {
-    const key = getGeminiVoiceApiKey(customKey);
-    return Boolean(key && key.startsWith('AIza'));
   },
 
   hasTextProviderKey(): boolean {
@@ -177,100 +125,6 @@ Keep the tone encouraging, constructive, and inspiring!`;
     }
 
     return await callSmartAI(prompt, systemInstruction, undefined, signal);
-  },
-
-  /**
-   * Generates speech audio using the official @google/genai Gemini TTS API in the browser,
-   * processes raw 24kHz PCM through the trim/fade pipeline (processRawPcmOrWavToProcessedWav),
-   * and caches the processed WAV buffer in IndexedDB (audioCacheService).
-   * Fails fast on 4xx errors or AbortSignal without retrying fallback models.
-   */
-  async generateSpeech(
-    text: string,
-    voiceName?: string,
-    customKey?: string,
-    signal?: AbortSignal
-  ): Promise<{ success: boolean; audioBuffer?: ArrayBuffer; fromCache?: boolean; aborted?: boolean; error?: string }> {
-    if (signal?.aborted) {
-      return { success: false, aborted: true, error: 'Aborted' };
-    }
-
-    const cleanText = stripMarkdown(text).trim();
-    if (!cleanText) {
-      return { success: false, error: 'Empty text provided for TTS.' };
-    }
-
-    const settings = storageService.getSettings();
-    const resolvedVoice = normalizeGeminiVoiceName(voiceName || settings.geminiVoice);
-
-    // 1. Check IndexedDB cache first
-    const cachedBuffer = await audioCacheService.getClip(cleanText, resolvedVoice);
-    if (signal?.aborted) {
-      return { success: false, aborted: true, error: 'Aborted' };
-    }
-    if (cachedBuffer && cachedBuffer.byteLength > 44) {
-      return { success: true, audioBuffer: cachedBuffer, fromCache: true };
-    }
-
-    const apiKey = getGeminiVoiceApiKey(customKey);
-    if (!apiKey) {
-      return {
-        success: false,
-        error: 'No Gemini API key configured in Settings. Enter your Gemini key (AIza...) in Settings to enable HD Gemini TTS.',
-      };
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
-    const ttsModels = [GEMINI_MODELS.TTS_PRIMARY, GEMINI_MODELS.TTS_FALLBACK];
-    let lastError: any = null;
-
-    for (const model of ttsModels) {
-      if (signal?.aborted) {
-        return { success: false, aborted: true, error: 'Aborted' };
-      }
-      try {
-        const response = await ai.models.generateContent({
-          model,
-          contents: [{ parts: [{ text: cleanText }] }],
-          config: {
-            responseModalities: ['AUDIO'],
-            abortSignal: signal,
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: resolvedVoice,
-                },
-              },
-            },
-          },
-        });
-
-        if (signal?.aborted) {
-          return { success: false, aborted: true, error: 'Aborted' };
-        }
-
-        const base64Audio =
-          response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (base64Audio) {
-          const rawPcmBuffer = base64ToArrayBuffer(base64Audio);
-          const processedWav = processRawPcmOrWavToProcessedWav(rawPcmBuffer, 24000);
-          await audioCacheService.saveClip(cleanText, resolvedVoice, processedWav);
-          return { success: true, audioBuffer: processedWav, fromCache: false };
-        }
-      } catch (err: any) {
-        lastError = err;
-        if (signal?.aborted || err?.name === 'AbortError') {
-          return { success: false, aborted: true, error: 'Aborted' };
-        }
-        // Fail fast on 4xx client/key/quota errors without waiting on fallback TTS models
-        if (isClientHttpError(err)) {
-          break;
-        }
-      }
-    }
-
-    const errMsg = lastError?.message || 'Gemini TTS failed to synthesize audio.';
-    return { success: false, error: errMsg };
   },
 
   async testProviderConnection(options?: {

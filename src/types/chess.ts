@@ -69,7 +69,7 @@ export interface GameResult {
 }
 
 export type AIProviderId = 'auto' | 'gemini' | 'groq' | 'openrouter' | 'openai' | 'anthropic' | 'xai' | 'bytez' | 'custom';
-export type TTSEngineType = 'gemini' | 'browser' | 'edge';
+export type TTSEngineType = 'edge';
 export type CoachVerbosity = 'silent' | 'brief' | 'detailed' | 'verbose';
 export type CoachPersonality = 'supportive' | 'strict' | 'aggressive' | 'professor';
 
@@ -89,9 +89,6 @@ export interface AppSettings {
   voiceVolume: number;
   ttsEngine: TTSEngineType;
   edgeVoice: string;
-  geminiVoice: string;
-  voiceProxyUrl?: string;
-  useNaturalVoice: boolean;
   pieceSet: string;
   pieceShadow: boolean;
   liveCoachEnabled: boolean;

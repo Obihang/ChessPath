@@ -1,20 +1,18 @@
 /**
- * Speech service providing unified Text-to-Speech (TTS) dispatching:
- * - Default: Instant Local Voice (Browser / Android SpeechSynthesis, <250ms latency)
- * - Optional HD Voice: Gemini TTS (@google/genai with PCM trim/fade pipeline and IndexedDB caching)
- * - Optional: Edge Neural TTS via user-configured HTTPS Voice Proxy URL
+ * Speech service providing unified MS Edge Neural Text-to-Speech (TTS) dispatching
+ * via the hardcoded https://chesspath-tts.vercel.app/tts endpoint.
  */
 
 import { AppSettings } from '../types/chess';
-import { geminiService } from './geminiService';
+import { DEFAULT_EDGE_TTS_URL, DEFAULT_EDGE_VOICE } from '../constants/aiModels';
 import { soundService } from './audioService';
-import { audioCacheService } from './audioCacheService';
-import { isValidHttpsProxyUrl } from './storageService';
 import {
   formatChessTextForSpeech,
   speak as dispatchSpeak,
   stopSpeech,
 } from '../utils/voice';
+
+export { DEFAULT_EDGE_TTS_URL, DEFAULT_EDGE_VOICE };
 
 export function convertChessNotationToSpokenText(text: string): string {
   return formatChessTextForSpeech(text);
@@ -22,19 +20,17 @@ export function convertChessNotationToSpokenText(text: string): string {
 
 export type SpeechErrorType =
   | 'voice_disabled'
-  | 'missing_key'
   | 'rate_limit'
   | 'api_failure'
   | 'timeout'
-  | 'unsupported_browser_speech'
   | 'audio_playback_failure';
 
 export interface SpeechDispatchResult {
   success: boolean;
   usedNatural: boolean;
+  aborted?: boolean;
   timeToFirstAudioMs?: number;
   error?: string;
-  proxyWarning?: string;
   errorType?: SpeechErrorType;
 }
 
@@ -48,7 +44,6 @@ export interface SpeechDiagnosticEntry {
 
 export interface SpeechDispatchOptions {
   signal?: AbortSignal;
-  allowLocalFallback?: boolean;
   onStart?: () => void;
   onFirstAudio?: (timeToFirstAudioMs: number) => void;
   onEnd?: () => void;
@@ -119,57 +114,14 @@ class SpeechService {
   }
 
   public stop(reason: string = 'User requested stop') {
-    soundService.stopActiveSpeech(40);
     stopSpeech();
     this.isSpeakingState = false;
-    this.logDiagnostic('info', `Stopped active audio playback smoothly (${reason}).`);
-  }
-
-  public async speakWithBrowserSpeech(
-    text: string,
-    settings: AppSettings,
-    options: SpeechDispatchOptions = {}
-  ): Promise<SpeechDispatchResult> {
-    const callStartTime = Date.now();
-    const res = await dispatchSpeak(text, true, {
-      ttsEngine: 'browser',
-      rate: settings.voiceRate,
-      volume: settings.voiceVolume,
-      onStart: () => {
-        this.isSpeakingState = true;
-        const firstMs = Date.now() - callStartTime;
-        options.onFirstAudio?.(firstMs);
-        options.onStart?.();
-        this.logDiagnostic('start', 'Browser speech synthesis playback started.');
-      },
-      onEnd: () => {
-        this.isSpeakingState = false;
-        this.logDiagnostic('end', 'Browser speech synthesis finished.');
-        options.onEnd?.();
-      },
-      onError: (err) => {
-        this.isSpeakingState = false;
-        this.logDiagnostic('error', err.message);
-        options.onError?.(err);
-      },
-    });
-
-    return {
-      success: res.success,
-      usedNatural: false,
-      timeToFirstAudioMs: Date.now() - callStartTime,
-      ...(res.success
-        ? {}
-        : {
-            error: res.error || 'Browser speech synthesis unavailable',
-            errorType: 'unsupported_browser_speech',
-          }),
-    };
+    this.logDiagnostic('info', `Stopped active audio playback (${reason}).`);
   }
 
   /**
-   * Plays instant cached verdict phrase ("Great move.", "Good move.", "Inaccuracy.", "Mistake.", "Blunder.")
-   * using IndexedDB cached Gemini TTS or active speech engine.
+   * Plays instant verdict phrase ("Great move.", "Good move.", "Inaccuracy.", "Mistake.", "Blunder.")
+   * using MS Edge Neural TTS with in-memory LRU caching.
    */
   public async speakVerdictInstant(
     classification: 'great' | 'good' | 'inaccuracy' | 'mistake' | 'blunder' | 'unavailable',
@@ -197,22 +149,8 @@ class SpeechService {
   }
 
   /**
-   * Pre-generates and caches short verdict phrases in IndexedDB when Gemini TTS is active and a Gemini key is configured.
-   */
-  public async pregenerateVerdictPhrases(settings: AppSettings): Promise<void> {
-    if (!settings.voiceEnabled) return;
-    if (settings.ttsEngine !== 'gemini') return;
-    if (!geminiService.hasGeminiVoiceKey()) return;
-
-    const voice = settings.geminiVoice || 'Kore';
-    await audioCacheService.pregenerateVerdictPhrases(voice, (phrase) =>
-      geminiService.generateSpeech(phrase, voice)
-    );
-  }
-
-  /**
    * Universal Speech Dispatcher:
-   * Single entrypoint for all coach speech (live coach, hint requests, sample move).
+   * Single entrypoint for all coach speech (live coach, hint requests, Settings test).
    */
   public async speakWithCoach(
     text: string,
@@ -220,25 +158,14 @@ class SpeechService {
     options: SpeechDispatchOptions = {}
   ): Promise<SpeechDispatchResult> {
     if (options.signal?.aborted) {
-      return { success: false, usedNatural: false };
+      return { success: false, usedNatural: false, aborted: true };
     }
 
-    const hasProxy = isValidHttpsProxyUrl(settings.voiceProxyUrl);
-    const engine =
-      settings.ttsEngine === 'edge' && !hasProxy
-        ? 'browser'
-        : settings.ttsEngine || 'browser';
-    const voiceLabel =
-      engine === 'edge'
-        ? settings.edgeVoice || 'en-US-AndrewNeural'
-        : engine === 'gemini'
-        ? settings.geminiVoice || 'Kore'
-        : 'Instant Local Voice';
+    const edgeVoice = settings.edgeVoice || DEFAULT_EDGE_VOICE;
 
     this.logDiagnostic('trigger', `speakWithCoach invoked: "${text.slice(0, 50)}..."`, {
       voiceEnabled: settings.voiceEnabled,
-      ttsEngine: engine,
-      voice: voiceLabel,
+      voice: edgeVoice,
     });
 
     if (!settings.voiceEnabled) {
@@ -253,57 +180,50 @@ class SpeechService {
     }
 
     if (!text || !text.trim()) {
-      return { success: true, usedNatural: false };
+      return { success: true, usedNatural: true };
     }
 
     const callStartTime = Date.now();
     let firstAudioMs = 0;
 
     const result = await dispatchSpeak(text, true, {
-      ttsEngine: engine,
-      geminiVoice: settings.geminiVoice || 'Kore',
-      edgeVoice: settings.edgeVoice || 'en-US-AndrewNeural',
-      voiceProxyUrl: settings.voiceProxyUrl || '',
+      edgeVoice,
       rate: settings.voiceRate,
       volume: settings.voiceVolume,
       signal: options.signal,
-      allowLocalFallback: options.allowLocalFallback,
       onStart: () => {
         this.isSpeakingState = true;
         firstAudioMs = Date.now() - callStartTime;
         options.onFirstAudio?.(firstAudioMs);
         options.onStart?.();
-        this.logDiagnostic(
-          'start',
-          `Coach speech playback started (${engine}: ${voiceLabel}) in ${firstAudioMs} ms.`
-        );
+        this.logDiagnostic('start', `MS Edge Neural TTS started (${edgeVoice}) in ${firstAudioMs} ms.`);
       },
       onEnd: () => {
         this.isSpeakingState = false;
-        this.logDiagnostic('end', 'Coach speech playback finished.');
+        this.logDiagnostic('end', 'MS Edge Neural TTS playback finished.');
         options.onEnd?.();
       },
       onError: (err) => {
         this.isSpeakingState = false;
-        this.logDiagnostic('error', `Coach speech error: ${err.message}`);
+        this.logDiagnostic('warn', `MS Edge Neural TTS unavailable: ${err.message}`);
         options.onError?.(err);
       },
     });
 
-    if (result.proxyWarning) {
-      this.logDiagnostic('warn', result.proxyWarning);
+    if (result.aborted) {
+      this.isSpeakingState = false;
+      return { success: false, usedNatural: false, aborted: true };
     }
 
     return {
       success: result.success,
       usedNatural: result.usedNatural,
       timeToFirstAudioMs: firstAudioMs || Date.now() - callStartTime,
-      ...(result.proxyWarning ? { proxyWarning: result.proxyWarning } : {}),
       ...(result.success
         ? {}
         : {
-            error: result.error || 'Speech playback failed.',
-            errorType: result.error?.includes('API key') ? 'missing_key' : 'api_failure',
+            error: result.error || 'Speech playback unavailable.',
+            errorType: 'api_failure',
           }),
     };
   }
