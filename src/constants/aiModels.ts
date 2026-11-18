@@ -9,12 +9,12 @@ export const GEMINI_MODELS = {
   TEXT_LEGACY_FALLBACK: 'gemini-3.8-flash',
 
   // Audio Transcription (STT)
-  STT_PRIMARY: 'gemini-3.5-transcribe',
-  STT_FALLBACK: 'gemini-3.5-flash-lite',
+  STT_PRIMARY: 'gemini-3.5-flash-lite',
+  STT_FALLBACK: 'gemini-3.8-flash-lite',
 
   // Text-to-Speech (TTS)
   TTS_PRIMARY: 'gemini-3.8-flash-lite-tts',
-  TTS_FALLBACK: 'gemini-3.8-flash-tts',
+  TTS_FALLBACK: 'gemini-3.8-pro-tts',
 } as const;
 
 export interface VoiceOption {
