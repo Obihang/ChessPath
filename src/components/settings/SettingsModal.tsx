@@ -33,7 +33,6 @@ import {
   Bot,
   Cpu,
   Globe,
-  Radio,
 } from 'lucide-react';
 import { engineService, EngineStatusInfo } from '../../services/engineService';
 import { PIECE_SETS, preloadPieceSet } from '../../config/pieceSets';
@@ -74,12 +73,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isTestingApi, setIsTestingApi] = useState(false);
   const [apiTestStatus, setApiTestStatus] = useState<{
     type: 'success' | 'error';
-    message: string;
-  } | null>(null);
-
-  const [isTestingMic, setIsTestingMic] = useState(false);
-  const [micTestStatus, setMicTestStatus] = useState<{
-    type: 'info' | 'success' | 'error';
     message: string;
   } | null>(null);
 
@@ -151,7 +144,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setIsSpeaking(false);
       setVoiceTestStatus(null);
       setApiTestStatus(null);
-      setMicTestStatus(null);
       return;
     }
 
@@ -172,7 +164,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       updated.ttsEngine = value ? 'gemini' : 'browser';
     } else if (key === 'voiceProxyUrl') {
       if (!isValidHttpsProxyUrl(value as string) && updated.ttsEngine === 'edge') {
-        updated.ttsEngine = 'gemini';
+        updated.ttsEngine = 'browser';
       }
     } else if (key === 'coachVerbosity') {
       updated.liveCoachEnabled = value !== 'silent';
@@ -271,37 +263,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleTestMicrophone = async () => {
-    setIsTestingMic(true);
-    setMicTestStatus({
-      type: 'info',
-      message: 'Recording from microphone for 3 seconds... Speak a chess question!',
-    });
-    try {
-      const res = await speechService.testMicrophone(
-        localSettings.aiApiKey || localSettings.geminiApiKey
-      );
-      if (res.success) {
-        setMicTestStatus({
-          type: 'success',
-          message: `Transcribed: "${res.transcript || '(empty)'}"`,
-        });
-      } else {
-        setMicTestStatus({
-          type: 'error',
-          message: res.error || 'Microphone transcription failed.',
-        });
-      }
-    } catch (e: any) {
-      setMicTestStatus({
-        type: 'error',
-        message: e?.message || 'Microphone test failed.',
-      });
-    } finally {
-      setIsTestingMic(false);
-    }
-  };
-
   const handleTestVoice = async () => {
     if (isSpeaking) {
       speechService.stop();
@@ -320,8 +281,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const hasHttpsProxy = isValidHttpsProxyUrl(localSettings.voiceProxyUrl);
       const currentEngine: TTSEngineType =
         localSettings.ttsEngine === 'edge' && !hasHttpsProxy
-          ? 'gemini'
-          : localSettings.ttsEngine || 'gemini';
+          ? 'browser'
+          : localSettings.ttsEngine || 'browser';
       const currentGeminiVoice = localSettings.geminiVoice || 'Kore';
       const currentEdgeVoice = localSettings.edgeVoice || 'en-US-AndrewNeural';
 
@@ -335,6 +296,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           voiceProxyUrl: localSettings.voiceProxyUrl || '',
           rate: localSettings.voiceRate,
           volume: localSettings.voiceVolume,
+          allowLocalFallback: false,
           onStart: () => {
             setIsTestingVoice(false);
             setIsSpeaking(true);
@@ -389,8 +351,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const hasValidHttpsProxy = isValidHttpsProxyUrl(localSettings.voiceProxyUrl);
   const activeTtsEngine: TTSEngineType =
     localSettings.ttsEngine === 'edge' && !hasValidHttpsProxy
-      ? 'gemini'
-      : localSettings.ttsEngine || 'gemini';
+      ? 'browser'
+      : localSettings.ttsEngine || 'browser';
   const activeApiKey = localSettings.aiApiKey || localSettings.geminiApiKey || '';
   const activeProvider = localSettings.aiProvider || 'auto';
   const detectedProvider = detectApiKeyProvider(activeApiKey, activeProvider);
@@ -508,8 +470,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     onChange={(e) => handleChange('ttsEngine', e.target.value as TTSEngineType)}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 text-xs focus:outline-hidden focus:border-amber-500"
                   >
-                    <option value="gemini">Gemini TTS (Official API — Default)</option>
-                    <option value="browser">Standard Device TTS (Offline)</option>
+                    <option value="browser">Instant Voice (Local — Fast, Default)</option>
+                    <option value="gemini">HD AI Voice (Gemini TTS — Slower)</option>
                     {hasValidHttpsProxy && (
                       <option value="edge">Edge Neural TTS (Custom HTTPS Proxy)</option>
                     )}
@@ -646,25 +608,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </>
                   )}
                 </button>
-
-                <button
-                  type="button"
-                  onClick={handleTestMicrophone}
-                  disabled={isTestingMic}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  {isTestingMic ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                      <span>Recording 3s...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Radio className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Test STT (3s Audio)</span>
-                    </>
-                  )}
-                </button>
               </div>
 
               {/* Sample Move Test Readout */}
@@ -689,21 +632,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {sampleMoveResult.error && (
                     <div className="text-rose-400">Voice note: {sampleMoveResult.error}</div>
                   )}
-                </div>
-              )}
-
-              {/* Mic Test Status */}
-              {micTestStatus && (
-                <div
-                  className={`p-2.5 rounded-lg text-xs flex items-start gap-2 border ${
-                    micTestStatus.type === 'error'
-                      ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-                      : micTestStatus.type === 'success'
-                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                      : 'bg-amber-500/15 border-amber-500/40 text-amber-300'
-                  }`}
-                >
-                  <div className="flex-1 leading-snug">{micTestStatus.message}</div>
                 </div>
               )}
 
@@ -814,7 +742,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <p className="text-[11px] text-slate-400 flex items-center gap-1 leading-relaxed">
                 <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span>
-                  Your API key is stored only in your browser/device localStorage and used directly for Gemini TTS, STT, and Coach chat.
+                  Your API key is stored only in your browser/device localStorage and used directly for AI Coach move commentary and optional HD Gemini TTS.
                 </span>
               </p>
             </div>

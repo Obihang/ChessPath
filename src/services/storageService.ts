@@ -30,7 +30,7 @@ export const DEFAULT_PROGRESS: UserProgress = {
   voiceEnabled: true,
   coachVerbosity: 'detailed',
   coachPersonality: 'strict',
-  ttsEngine: 'gemini',
+  ttsEngine: 'browser',
   geminiVoice: 'Kore',
   edgeVoice: 'en-US-AndrewNeural',
   voiceProxyUrl: '',
@@ -56,11 +56,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceEnabled: true,
   voiceRate: 1.0,
   voiceVolume: 1.0,
-  ttsEngine: 'gemini',
+  ttsEngine: 'browser',
   edgeVoice: 'en-US-AndrewNeural',
   geminiVoice: 'Kore',
   voiceProxyUrl: '',
-  useNaturalVoice: true,
+  useNaturalVoice: false,
   pieceSet: 'cburnett',
   pieceShadow: true,
   liveCoachEnabled: true,
@@ -68,8 +68,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   coachVerbosity: 'detailed',
   coachPersonality: 'strict',
   revealBetterMoveNames: true,
-  autoSendTranscribed: false,
-  streamingVoice: false,
 };
 
 function resolveEffectiveTtsEngine(
@@ -82,12 +80,12 @@ function resolveEffectiveTtsEngine(
     return 'browser';
   }
   if (requestedEngine === 'edge') {
-    return hasProxy ? 'edge' : 'gemini';
+    return hasProxy ? 'edge' : 'browser';
   }
   if (requestedEngine === 'gemini') {
     return 'gemini';
   }
-  return useNaturalVoice === false ? 'browser' : 'gemini';
+  return useNaturalVoice === true ? 'gemini' : 'browser';
 }
 
 export const storageService = {
@@ -235,7 +233,7 @@ export const storageService = {
       updated.ttsEngine = value ? 'gemini' : 'browser';
     } else if (key === 'voiceProxyUrl') {
       if (!isValidHttpsProxyUrl(value as string) && updated.ttsEngine === 'edge') {
-        updated.ttsEngine = 'gemini';
+        updated.ttsEngine = 'browser';
       }
     } else if (key === 'aiApiKey') {
       updated.geminiApiKey = value as string;

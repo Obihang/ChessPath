@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, VolumeX, Settings as SettingsIcon, Sparkles, GraduationCap } from 'lucide-react';
+import { Volume2, VolumeX, Settings as SettingsIcon, GraduationCap } from 'lucide-react';
 import { soundService } from '../../services/audioService';
 import { PWAInstallButton } from './PWAInstallButton';
 import { TTSEngineType } from '../../types/chess';
@@ -11,24 +11,22 @@ interface TopBarProps {
   onToggleSound: () => void;
   onToggleVoice?: () => void;
   onOpenSettings: () => void;
-  onOpenCoach?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
   soundEnabled,
   voiceEnabled = true,
-  ttsEngine = 'gemini',
+  ttsEngine = 'browser',
   onToggleSound,
   onToggleVoice,
   onOpenSettings,
-  onOpenCoach,
 }) => {
   const engineLabel =
     ttsEngine === 'gemini'
-      ? 'Gemini TTS'
+      ? 'HD Gemini TTS'
       : ttsEngine === 'edge'
       ? 'Edge Proxy'
-      : 'Offline TTS';
+      : 'Instant Voice';
 
   return (
     <header className="sticky top-0 z-30 w-full bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80">
@@ -53,18 +51,6 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="flex items-center gap-1.5">
           {/* PWA Install Button */}
           <PWAInstallButton />
-
-          {/* AI Coach Button */}
-          {onOpenCoach && (
-            <button
-              onClick={onOpenCoach}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 text-amber-300 text-xs font-semibold transition-colors"
-              title="Open AI Coach"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Coach</span>
-            </button>
-          )}
 
           {/* Voice Output Toggle if provided */}
           {onToggleVoice && (

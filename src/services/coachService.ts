@@ -196,14 +196,40 @@ export function detectApiKeyProvider(
 }
 
 /**
+ * Returns true when an error is an abort or HTTP 4xx client/auth/quota/model error
+ * where retrying fallback models adds latency without helping.
+ */
+export function isClientHttpError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as { status?: number; code?: number; message?: string; name?: string };
+  if (anyErr.name === 'AbortError') return true;
+  const status = anyErr.status ?? anyErr.code;
+  if (typeof status === 'number' && status >= 400 && status < 500) {
+    return true;
+  }
+  const msg = String(anyErr.message || err || '');
+  return (
+    /\bHTTP 4\d\d\b/i.test(msg) ||
+    /\b(400|401|403|404|429)\b/.test(msg) ||
+    /API_KEY_INVALID|API key not valid|PERMISSION_DENIED|NOT_FOUND|INVALID_ARGUMENT|RESOURCE_EXHAUSTED|AbortError|aborted/i.test(
+      msg
+    )
+  );
+}
+
+/**
  * Client-side Gemini streaming helper using the user's API key from Settings.
  */
 export async function streamSmartAI(
   prompt: string,
   systemInstruction: string,
   onChunk?: (chunkText: string) => void,
-  explicitKey?: string
+  explicitKey?: string,
+  signal?: AbortSignal
 ): Promise<string> {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
   const apiKey = getResolvedAiApiKey(explicitKey);
   if (!apiKey) {
     throw new Error('NO_KEY');
@@ -220,18 +246,25 @@ export async function streamSmartAI(
   let lastError: unknown = null;
 
   for (const model of modelsToTry) {
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
     try {
       const responseStream = await ai.models.generateContentStream({
         model,
         contents: prompt,
         config: {
           systemInstruction,
-          temperature: 0.5,
-          maxOutputTokens: 300,
+          temperature: 0.4,
+          maxOutputTokens: 160,
+          abortSignal: signal,
         },
       });
 
       for await (const chunk of responseStream) {
+        if (signal?.aborted) {
+          throw new DOMException('Aborted', 'AbortError');
+        }
         const text = chunk.text || '';
         if (text) {
           fullText += text;
@@ -244,6 +277,9 @@ export async function streamSmartAI(
       }
     } catch (err) {
       lastError = err;
+      if (isClientHttpError(err) || signal?.aborted) {
+        break;
+      }
     }
   }
 
@@ -260,8 +296,12 @@ export async function streamSmartAI(
 export async function callSmartAI(
   prompt: string,
   systemInstruction: string,
-  explicitKey?: string
+  explicitKey?: string,
+  signal?: AbortSignal
 ): Promise<string> {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
   const apiKey = getResolvedAiApiKey(explicitKey);
   const detected = detectApiKeyProvider(apiKey);
 
@@ -279,20 +319,28 @@ export async function callSmartAI(
     let lastErr: unknown = null;
 
     for (const model of modelsToTry) {
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       try {
         const response = await ai.models.generateContent({
           model,
           contents: prompt,
           config: {
             systemInstruction,
-            temperature: 0.5,
-            maxOutputTokens: 350,
+            temperature: 0.4,
+            maxOutputTokens: 180,
+            abortSignal: signal,
           },
         });
         const text = (response.text || '').trim();
         if (text) return text;
       } catch (err) {
         lastErr = err;
+        // Fail fast on 4xx errors or abort instead of waiting on sequential model fallbacks
+        if (isClientHttpError(err) || signal?.aborted) {
+          break;
+        }
       }
     }
 
@@ -305,6 +353,7 @@ export async function callSmartAI(
   if (detected.provider === 'anthropic') {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
+      signal,
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
@@ -313,7 +362,7 @@ export async function callSmartAI(
       },
       body: JSON.stringify({
         model: detected.model,
-        max_tokens: 300,
+        max_tokens: 180,
         system: systemInstruction,
         messages: [{ role: 'user', content: prompt }],
       }),
@@ -353,6 +402,7 @@ export async function callSmartAI(
 
   const response = await fetch(url, {
     method: 'POST',
+    signal,
     headers,
     body: JSON.stringify({
       model: detected.model,
@@ -360,8 +410,8 @@ export async function callSmartAI(
         { role: 'system', content: systemInstruction },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.5,
-      max_tokens: 300,
+      temperature: 0.4,
+      max_tokens: 180,
     }),
   });
 
@@ -613,6 +663,7 @@ export interface AnalyzeMoveWithAIInput {
   tacticalReasons?: string[];
   verbosity?: CoachVerbosity;
   personality?: CoachPersonality;
+  signal?: AbortSignal;
 }
 
 export function buildFallbackMoveComment(
@@ -734,10 +785,9 @@ export function buildFallbackMoveComment(
 }
 
 /**
- * Fast, concise live coach reaction to a player's move that analyzes the move,
- * criticizes mistakes/blunders, and suggests the better plan or move according to
- * the chosen coachPersonality and coachVerbosity.
- * Cleanly falls back to buildFallbackMoveComment if no API key is set or if the AI call fails.
+ * Fast, concise live coach reaction to a player's move (1 crisp sentence <= 18 words)
+ * that analyzes the move according to coachPersonality and coachVerbosity.
+ * Cleanly falls back to buildFallbackMoveComment if no API key is set or if the AI call fails/aborts.
  */
 export async function analyzeMoveWithAI({
   fen,
@@ -749,8 +799,9 @@ export async function analyzeMoveWithAI({
   tacticalReasons = [],
   verbosity = 'detailed',
   personality = 'strict',
+  signal,
 }: AnalyzeMoveWithAIInput): Promise<string> {
-  if (verbosity === 'silent') return '';
+  if (verbosity === 'silent' || signal?.aborted) return '';
 
   const activePersonality = getResolvedCoachPersonality(personality);
   const rawDrop = typeof evalDrop === 'number' ? Math.max(0, evalDrop) : 0;
@@ -775,45 +826,40 @@ export async function analyzeMoveWithAI({
 
   const verbosityDescriptions: Record<CoachVerbosity, string> = {
     silent: 'Output nothing.',
-    brief:
-      'Keep it to 1 punchy sentence (max 22 words). Criticize why the mistake/blunder fails and hint at the better plan without spoiling the exact move.',
-    detailed:
-      'Keep it to 1-2 sentences (max 38 words). Analyze the move, criticize any flaw or praise strong execution, and suggest the strategic/tactical idea behind the best continuation without spoiling the exact move name.',
-    verbose:
-      `Keep it to 2 sentences (max 50 words). Give a deep tactical and positional breakdown of ${moveSan}, explicitly naming the engine's best move (${bestMoveSan || 'the top engine line'}) and explaining why it is superior.`,
+    brief: 'Reply in 1 crisp sentence (max 18 words).',
+    detailed: 'Reply in 1 crisp sentence (max 18 words). State why it works or what idea was stronger.',
+    verbose: `Reply in 1 crisp sentence (max 18 words). State the tactical key or stronger move (${bestMoveSan || 'engine line'}).`,
   };
 
   const spoilerRule =
     verbosity === 'verbose'
-      ? `Explicitly name the best move (${bestMoveSan || 'the engine recommendation'}) and explain the concrete continuation.`
-      : `Do NOT spoil the exact move notation "${bestMoveSan || ''}" directly; instead, describe the tactical motif or strategic plan the player should look for.`;
+      ? `Name the best move (${bestMoveSan || 'top engine move'}) succinctly.`
+      : `Do NOT state exact move notation "${bestMoveSan || ''}"; mention the strategic idea only.`;
 
   const systemInstruction = `${PERSONA_PROMPTS[activePersonality]}
 ${verbosityDescriptions[verbosity]}
 Rules:
-- Output PLAIN SPOKEN TEXT ONLY (no markdown, no asterisks, no bullet points).
-- Strictly respect the move classification "${classification}"—never call a good or great move a blunder.
+- Output 1 crisp sentence of PLAIN SPOKEN TEXT ONLY, max 18 words (no markdown, no asterisks).
+- Respect the move classification "${classification}".
 - ${spoilerRule}`;
 
   const dropInfo =
     evalDrop !== undefined && evalDrop !== null
-      ? `Evaluation drop: ${normalizedDropPawns.toFixed(2)} pawns.`
+      ? `Eval drop: ${normalizedDropPawns.toFixed(2)}p.`
       : '';
 
-  const prompt = `Position before move (FEN): ${prevFen}
-Move played: ${moveSan}
-Position after move (FEN): ${fen}
-Move classification: ${classification}
-${dropInfo}
-Engine best move: ${bestMoveSan || 'N/A'}
-Tactical/positional notes: ${tacticalReasons.join('; ') || 'Standard positional play'}
-
-Give your live spoken reaction to ${moveSan}:`;
+  const prompt = `Before: ${prevFen}
+Move: ${moveSan} (${classification}) ${dropInfo}
+After: ${fen}
+Best: ${bestMoveSan || 'N/A'}
+Notes: ${tacticalReasons.slice(0, 2).join('; ') || 'Positional play'}
+Spoken 1-sentence reaction (<=18 words):`;
 
   try {
-    const aiReply = await callSmartAI(prompt, systemInstruction);
+    const aiReply = await callSmartAI(prompt, systemInstruction, undefined, signal);
+    if (signal?.aborted) return '';
     return aiReply || fallbackText;
   } catch {
-    return fallbackText;
+    return signal?.aborted ? '' : fallbackText;
   }
 }

@@ -298,6 +298,8 @@ export interface SpeakOptions {
   voiceProxyUrl?: string;
   rate?: number;
   volume?: number;
+  signal?: AbortSignal;
+  allowLocalFallback?: boolean;
   onStart?: () => void;
   onEnd?: () => void;
   onError?: (err: Error) => void;
@@ -319,12 +321,12 @@ async function speakWithGeminiTts(
   options: SpeakOptions,
   proxyWarning?: string
 ): Promise<SpeakResult> {
-  if (mySpeechId !== currentSpeechId) {
+  if (mySpeechId !== currentSpeechId || options.signal?.aborted) {
     return { success: false, usedNatural: false };
   }
 
-  const ttsRes = await geminiService.generateSpeech(cleanText, geminiVoice);
-  if (mySpeechId !== currentSpeechId) {
+  const ttsRes = await geminiService.generateSpeech(cleanText, geminiVoice, undefined, options.signal);
+  if (mySpeechId !== currentSpeechId || options.signal?.aborted || ttsRes.aborted) {
     return { success: false, usedNatural: false };
   }
 
@@ -332,6 +334,18 @@ async function speakWithGeminiTts(
     const combinedErr = proxyWarning
       ? `${proxyWarning} Fallback to Gemini TTS also failed: ${ttsRes.error || 'No audio returned.'}`
       : ttsRes.error || 'Gemini TTS failed to generate speech.';
+
+    // Fail fast to instant local speech during live gameplay when enabled
+    if (options.allowLocalFallback !== false) {
+      const localRes = await speakWithBrowserTts(cleanText, rate, volume, mySpeechId, options);
+      if (localRes.success) {
+        return {
+          ...localRes,
+          proxyWarning: `${combinedErr} Using Instant Local Voice instead.`,
+        };
+      }
+    }
+
     options.onError?.(new Error(combinedErr));
     return { success: false, usedNatural: false, error: combinedErr, proxyWarning };
   }
@@ -366,7 +380,7 @@ async function speakWithBrowserTts(
   mySpeechId: number,
   options: SpeakOptions
 ): Promise<SpeakResult> {
-  if (mySpeechId !== currentSpeechId) {
+  if (mySpeechId !== currentSpeechId || options.signal?.aborted) {
     return { success: false, usedNatural: false };
   }
 
@@ -376,25 +390,50 @@ async function speakWithBrowserTts(
     typeof SpeechSynthesisUtterance !== 'undefined';
 
   if (!hasSpeechSynthesis) {
-    const err = 'Browser SpeechSynthesis is not supported in this browser.';
+    const err = 'Browser SpeechSynthesis is not supported in this environment.';
     options.onError?.(new Error(err));
     return { success: false, usedNatural: false, error: err };
   }
 
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices || voices.length === 0) {
-    const err = 'No local browser speech voices are installed on this device. Switch Speech Engine to Gemini TTS.';
-    options.onError?.(new Error(err));
-    return { success: false, usedNatural: false, error: err };
-  }
+  // Note: Chrome/Android WebView often returns [] for getVoices() before voiceschanged,
+  // yet still speaks normally with utterance.lang = 'en-US' using the system default voice.
+  const voices = window.speechSynthesis.getVoices() || [];
 
   return new Promise<SpeakResult>((resolve) => {
     let settled = false;
     let started = false;
 
+    const cleanupAbortListener = () => {
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(startTimeout);
+      cleanupAbortListener();
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore
+      }
+      resolve({ success: false, usedNatural: false });
+    };
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        resolve({ success: false, usedNatural: false });
+        return;
+      }
+      options.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     const startTimeout = setTimeout(() => {
       if (!settled && !started) {
         settled = true;
+        cleanupAbortListener();
         try {
           window.speechSynthesis.cancel();
         } catch {
@@ -419,6 +458,10 @@ async function speakWithBrowserTts(
       utterance.volume = Math.max(0, Math.min(1.0, volume));
 
       utterance.onstart = () => {
+        if (mySpeechId !== currentSpeechId || options.signal?.aborted) {
+          onAbort();
+          return;
+        }
         started = true;
         clearTimeout(startTimeout);
         options.onStart?.();
@@ -427,6 +470,7 @@ async function speakWithBrowserTts(
         if (settled) return;
         settled = true;
         clearTimeout(startTimeout);
+        cleanupAbortListener();
         options.onEnd?.();
         resolve({ success: true, usedNatural: false });
       };
@@ -434,6 +478,7 @@ async function speakWithBrowserTts(
         if (settled) return;
         settled = true;
         clearTimeout(startTimeout);
+        cleanupAbortListener();
         if (e.error === 'canceled' || e.error === 'interrupted') {
           resolve({ success: true, usedNatural: false });
           return;
@@ -448,6 +493,7 @@ async function speakWithBrowserTts(
       if (!settled) {
         settled = true;
         clearTimeout(startTimeout);
+        cleanupAbortListener();
         const errMsg = e?.message || 'Browser speech synthesis threw an exception.';
         options.onError?.(new Error(errMsg));
         resolve({ success: false, usedNatural: false, error: errMsg });
@@ -458,15 +504,19 @@ async function speakWithBrowserTts(
 
 /**
  * Speaks a chess coaching phrase using:
- * 1. Gemini TTS (default, official @google/genai API with PCM trim/fade pipeline & IndexedDB cache)
- * 2. Edge Neural TTS (optional, ONLY when Settings -> Voice proxy URL is a valid https:// URL; if proxy fails, shows exact error and falls back to Gemini TTS)
- * 3. Browser Device TTS (local window.speechSynthesis, failing honestly if unavailable)
+ * 1. Instant Voice (Local — Browser/Android SpeechSynthesis, default for <250ms latency)
+ * 2. HD AI Voice (Gemini TTS — official @google/genai PCM pipeline with IndexedDB cache)
+ * 3. Edge Neural TTS (optional, ONLY when Settings -> Voice proxy URL is a valid https:// URL)
  */
 export async function speak(
   text: string,
   force: boolean = false,
   options: SpeakOptions = {}
 ): Promise<SpeakResult> {
+  if (options.signal?.aborted) {
+    return { success: false, usedNatural: false };
+  }
+
   const settings = storageService.getSettings();
 
   if (!force && !settings.voiceEnabled) {
@@ -484,9 +534,9 @@ export async function speak(
   const voiceProxyUrl = (options.voiceProxyUrl ?? settings.voiceProxyUrl ?? '').trim();
   const hasHttpsProxy = isValidHttpsProxyUrl(voiceProxyUrl);
 
-  let engine: TTSEngineType = options.ttsEngine || settings.ttsEngine || 'gemini';
+  let engine: TTSEngineType = options.ttsEngine || settings.ttsEngine || 'browser';
   if (engine === 'edge' && !hasHttpsProxy) {
-    engine = 'gemini';
+    engine = 'browser';
   }
 
   const geminiVoice = options.geminiVoice || settings.geminiVoice || 'Kore';
@@ -500,7 +550,7 @@ export async function speak(
 
   if (engine === 'edge' && hasHttpsProxy) {
     const proxyRes = await synthesizeEdgeProxyAudio(cleanText, edgeVoice, voiceProxyUrl);
-    if (mySpeechId !== currentSpeechId) {
+    if (mySpeechId !== currentSpeechId || options.signal?.aborted) {
       return { success: false, usedNatural: false };
     }
 
@@ -509,11 +559,11 @@ export async function speak(
       if (played) {
         return { success: true, usedNatural: true };
       }
-      const playbackErr = `Edge proxy audio playback failed (${voiceProxyUrl}). Falling back to Gemini TTS.`;
+      const playbackErr = `Edge proxy audio playback failed (${voiceProxyUrl}). Falling back.`;
       return speakWithGeminiTts(cleanText, geminiVoice, rate, volume, mySpeechId, options, playbackErr);
     }
 
-    const proxyErr = `Edge proxy error (${proxyRes.error || 'failed'}). Falling back to Gemini TTS.`;
+    const proxyErr = `Edge proxy error (${proxyRes.error || 'failed'}). Falling back.`;
     return speakWithGeminiTts(cleanText, geminiVoice, rate, volume, mySpeechId, options, proxyErr);
   }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, Volume2, VolumeX, MessageSquare, X, RotateCw, Navigation, Loader2 } from 'lucide-react';
+import { Bot, Volume2, VolumeX, X, RotateCw, Navigation, Loader2 } from 'lucide-react';
 import { CoachMode, CoachPersonality, CoachVerbosity } from '../../types/chess';
 import { MoveFacts } from '../../services/coachCommentaryService';
 
@@ -14,7 +14,6 @@ export interface LiveCommentaryCardProps {
   onPersonalityChange?: (personality: CoachPersonality) => void;
   facts?: MoveFacts | null;
   isAnalyzing?: boolean;
-  onOpenCoach?: () => void;
   onDismiss?: () => void;
   onRepeat?: () => void;
   onShowBetterMove?: (from: string, to: string) => void;
@@ -33,7 +32,6 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
   onPersonalityChange,
   facts,
   isAnalyzing = false,
-  onOpenCoach,
   onDismiss,
   onRepeat,
   onShowBetterMove,
@@ -155,17 +153,6 @@ export const LiveCommentaryCard: React.FC<LiveCommentaryCardProps> = ({
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5 text-slate-500" /> : <Volume2 className="w-3.5 h-3.5 text-amber-400" />}
           </button>
-
-          {onOpenCoach && (
-            <button
-              type="button"
-              onClick={onOpenCoach}
-              className="p-1 rounded-md text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition-colors"
-              title="Chat with AI Coach"
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-            </button>
-          )}
 
           {onDismiss && (
             <button

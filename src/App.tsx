@@ -11,7 +11,6 @@ import { OpeningsView } from './components/openings/OpeningsView';
 import { PracticeView } from './components/practice/PracticeView';
 import { ProgressView } from './components/progress/ProgressView';
 import { SettingsModal } from './components/settings/SettingsModal';
-import { AICoachDrawer } from './components/coach/AICoachDrawer';
 import { validateAllContent } from './utils/validateContent';
 
 export default function App() {
@@ -24,16 +23,6 @@ export default function App() {
   const [progress, setProgress] = useState<UserProgress>(() => storageService.getProgress());
   const [activeTab, setActiveTab] = useState<ActiveTab>('play');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
-  const [isCoachOpen, setIsCoachOpen] = useState<boolean>(false);
-
-  // Active game context for AI coach
-  const [currentFen, setCurrentFen] = useState<string>('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1');
-  const [moveHistory, setMoveHistory] = useState<string[]>([]);
-
-  const handlePositionChange = useCallback((fen: string, history: string[]) => {
-    setCurrentFen((prev) => (prev === fen ? prev : fen));
-    setMoveHistory(history);
-  }, []);
 
   useEffect(() => {
     soundService.setEnabled(settings.soundEnabled);
@@ -159,17 +148,14 @@ export default function App() {
         ttsEngine={settings.ttsEngine}
         onToggleSound={handleToggleSound}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenCoach={() => setIsCoachOpen(true)}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 pb-20 overflow-x-hidden">
+      <main className="flex-1 pb-24 overflow-x-hidden">
         {activeTab === 'play' && (
           <PlayView
             settings={settings}
             onOpenSettings={() => setIsSettingsOpen(true)}
-            onOpenCoach={() => setIsCoachOpen(true)}
-            onPositionChange={handlePositionChange}
             onUpdateSettings={handleUpdateSettings}
             onVerbosityChange={handleVerbosityChange}
             onPersonalityChange={handlePersonalityChange}
@@ -219,17 +205,6 @@ export default function App() {
 
       {/* Bottom 5-Tab Navigation Bar */}
       <BottomNav activeTab={activeTab} onChangeTab={setActiveTab} />
-
-      {/* Global AI Coach Drawer */}
-      <AICoachDrawer
-        isOpen={isCoachOpen}
-        onClose={() => setIsCoachOpen(false)}
-        currentFen={currentFen}
-        moveHistory={moveHistory}
-        settings={settings}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onUpdateSettings={handleUpdateSettings}
-      />
 
       {/* Global Settings Modal */}
       <SettingsModal

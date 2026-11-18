@@ -264,7 +264,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   };
 
   return (
-    <div className="relative w-full max-w-[520px] aspect-square mx-auto select-none touch-manipulation">
+    <div className="relative w-full max-w-[min(92vw,calc(100dvh-250px),480px)] aspect-square mx-auto select-none touch-manipulation">
       {/* Outer wooden border / bezel */}
       <div className="w-full h-full p-2.5 sm:p-3.5 bg-slate-900 border-2 border-slate-800 rounded-2xl shadow-2xl flex flex-col justify-center">
         {/* The 8x8 Grid */}

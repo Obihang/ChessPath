@@ -14,7 +14,6 @@ import {
 } from '../../types/chess';
 import { ChessBoard } from '../board/ChessBoard';
 import { LiveCommentaryCard } from '../board/LiveCommentaryCard';
-import { LiveChatIndicator } from '../coach/LiveChatIndicator';
 import { GameClock } from './GameClock';
 import { CapturedPieces } from '../board/CapturedPieces';
 import { MoveHistory } from '../board/MoveHistory';
@@ -47,8 +46,6 @@ import {
 interface PlayViewProps {
   settings: AppSettings;
   onOpenSettings: () => void;
-  onOpenCoach: () => void;
-  onPositionChange?: (fen: string, history: string[]) => void;
   onUpdateSettings?: (settings: AppSettings) => void;
   onVerbosityChange?: (verbosity: CoachVerbosity) => void;
   onPersonalityChange?: (personality: CoachPersonality) => void;
@@ -64,9 +61,7 @@ const TIME_CONTROLS: TimeControl[] = [
 
 export const PlayView: React.FC<PlayViewProps> = ({
   settings,
-  onOpenSettings,
-  onOpenCoach,
-  onPositionChange,
+  onOpenSettings: _onOpenSettings,
   onUpdateSettings,
   onVerbosityChange,
   onPersonalityChange,
@@ -162,21 +157,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
   // Setup Drawer / Panel Toggle & Post-Game Review
   const [showSetup, setShowSetup] = useState<boolean>(false);
   const [showPostGameReview, setShowPostGameReview] = useState<boolean>(false);
-
-  // Sync active position with global AI Coach
-  const lastFenRef = useRef<string>('');
-  useEffect(() => {
-    if (onPositionChange) {
-      const currentFen = game.fen();
-      const historyArr = moves.map((m) => m.san);
-      const historyKey = historyArr.join(',');
-      const combined = `${currentFen}|${historyKey}`;
-      if (lastFenRef.current !== combined) {
-        lastFenRef.current = combined;
-        onPositionChange(currentFen, historyArr);
-      }
-    }
-  }, [game, moves, onPositionChange]);
 
   // Material Calculations
   const [whiteCaptures, setWhiteCaptures] = useState<PieceType[]>([]);
@@ -539,13 +519,13 @@ export const PlayView: React.FC<PlayViewProps> = ({
     try {
       const currentFen = game.fen();
       const side = game.turn() === 'w' ? 'White' : 'Black';
-      const evalInfo = await engineService.evaluate(currentFen, 400);
+      const evalInfo = await engineService.evaluate(currentFen, 180);
 
       let hintText = '';
       if (geminiService.hasKey()) {
         hintText = await geminiService.getHint(
           currentFen,
-          `Provide an encouraging strategic hint and idea for ${side} in this position`,
+          `Give one crisp strategic hint for ${side} (max 18 words)`,
           side
         );
       } else if (evalInfo && evalInfo.bestMove) {
@@ -565,7 +545,8 @@ export const PlayView: React.FC<PlayViewProps> = ({
 
       setLatestComment(hintText);
       if (settings.voiceEnabled) {
-        speechService.speakWithCoach(hintText, settings);
+        speechService.stop('Hint requested');
+        speechService.speakWithCoach(hintText, settings, { allowLocalFallback: true });
       }
     } catch (e) {
       console.warn('Coach hint error:', e);
@@ -629,7 +610,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
   const isBoardDisabled = !!gameResult || isAiThinking || !isPlayerTurn;
 
   return (
-    <div className="flex flex-col items-center w-full max-w-xl mx-auto px-3 py-2 space-y-3">
+    <div className="flex flex-col items-center w-full max-w-xl mx-auto px-3 py-1.5 space-y-2">
       {/* Top Controls: Mode Switcher & Game Setup Trigger */}
       <div className="flex items-center justify-between w-full max-w-[520px] px-1">
         <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
@@ -689,7 +670,7 @@ export const PlayView: React.FC<PlayViewProps> = ({
       />
 
       {/* Interactive ChessBoard */}
-      <div className="w-full relative">
+      <div className="w-full flex justify-center relative">
         <ChessBoard
           game={game}
           orientation={boardOrientation}
@@ -700,7 +681,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
           customArrow={customArrow}
           onMove={handleUserMove}
         />
-        <LiveChatIndicator onClick={onOpenCoach} />
       </div>
 
       {/* Status Bar */}
@@ -766,7 +746,6 @@ export const PlayView: React.FC<PlayViewProps> = ({
           facts={commentFacts}
           isAnalyzing={isCoachAnalyzing}
           error={coachError}
-          onOpenCoach={onOpenCoach}
           onDismiss={dismissCoachComment}
           onRepeat={repeatCoachComment}
           onShowBetterMove={(from, to) => setCustomArrow({ from, to, color: '#10b981' })}
@@ -825,6 +804,28 @@ export const PlayView: React.FC<PlayViewProps> = ({
               <option value="aggressive">Aggressive</option>
               <option value="professor">Professor</option>
             </select>
+
+            {/* Quick Voice Mode Toggle: Instant Local vs HD Gemini TTS */}
+            <button
+              type="button"
+              onClick={() => {
+                const nextEngine = settings.ttsEngine === 'gemini' ? 'browser' : 'gemini';
+                const updated = storageService.updateSetting('ttsEngine', nextEngine);
+                onUpdateSettings?.(updated);
+              }}
+              className={`px-2 py-1 rounded-lg border text-[10px] font-semibold transition-colors ${
+                settings.ttsEngine === 'gemini'
+                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+                  : 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+              }`}
+              title={
+                settings.ttsEngine === 'gemini'
+                  ? 'HD AI Voice (Gemini TTS — slower). Click for Instant Local Voice.'
+                  : 'Instant Voice (Local <250ms). Click for HD Gemini TTS.'
+              }
+            >
+              {settings.ttsEngine === 'gemini' ? 'HD Voice' : 'Instant Voice'}
+            </button>
 
             <button
               type="button"

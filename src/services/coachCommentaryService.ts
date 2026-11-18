@@ -168,7 +168,7 @@ export const coachCommentaryService = {
   async precomputePlayerTurn(fen: string): Promise<void> {
     if (precomputeCache.has(fen)) return;
     try {
-      const res = await engineService.evaluate(fen, 250);
+      const res = await engineService.evaluate(fen, 180);
       if (res.isAvailable) {
         precomputeCache.set(fen, {
           score: res.score,
@@ -300,11 +300,16 @@ export const coachCommentaryService = {
     facts: MoveFacts,
     recentMoves: string[],
     mode: CoachMode,
-    isPlayerMove: boolean
+    isPlayerMove: boolean,
+    signal?: AbortSignal
   ): Promise<CommentaryResult | null> {
     const eventId = `${facts.previousFen}_${facts.moveUci}_${facts.fen}_${mode}`;
 
     try {
+      if (signal?.aborted) {
+        return null;
+      }
+
       // 1. Check mode silence rule for opponent moves
       if (!isPlayerMove && !this.shouldModeComment(mode, facts, isPlayerMove)) {
         return null;
@@ -356,66 +361,65 @@ export const coachCommentaryService = {
         return result;
       }
 
-      // 5. Build strict factual prompt
+      // 5. Build strict factual ultra-short prompt (1 crisp sentence, <=18 words)
       const settings = storageService.getSettings();
       const revealMoveNames = settings.revealBetterMoveNames ?? true;
       const maxSentences = getMaxSentencesForMode(mode);
       const maxWords = getMaxWordsForMode(mode);
       const mover = facts.moverColor === 'w' ? 'White' : 'Black';
-      const recentNotation = recentMoves.slice(-8).join(' ') || facts.moveSan;
+      const recentNotation = recentMoves.slice(-6).join(' ') || facts.moveSan;
 
       const moveNamingInstruction = revealMoveNames
-        ? `If a better move existed, name the move notation explicitly (${facts.bestMoveSan || 'engine move'}).`
-        : `Do NOT state exact move notation or coordinate names (like ${facts.bestMoveSan || 'Nf3'}). Instead, describe the strategic idea/motif in plain words (e.g., 'controlling the open central file').`;
+        ? `If a better move existed, name ${facts.bestMoveSan || 'it'} briefly.`
+        : `Do NOT state exact move notation (like ${facts.bestMoveSan || 'Nf3'}); state the idea briefly.`;
 
       let modeGuidance = '';
       switch (mode) {
         case 'learning':
-          modeGuidance = `Full Learning mode: Explain (1) what the move accomplished, (2) its main strategic/tactical idea, (3) why it is good or what weakness it introduced, and (4) a stronger alternative if available. Max 4 concise sentences and 65 words.`;
+          modeGuidance = 'Learning mode: 1 crisp sentence (max 18 words) stating what the move achieved or conceded.';
           break;
         case 'criticizing':
-          modeGuidance = `Criticizing mode: Be direct about the mistake, concession, or missed tactic, and state the verified stronger move if available. Max 3 concise sentences and 50 words.`;
+          modeGuidance = 'Criticizing mode: 1 crisp sentence (max 18 words) calling out any mistake or missed tactic directly.';
           break;
         case 'simple':
-          modeGuidance = `Simple mode: Use ultra-clear beginner language to explain one key idea about this move. Max 2 short sentences and 20 words.`;
+          modeGuidance = 'Simple mode: 1 crisp beginner sentence (max 18 words) explaining the key idea.';
           break;
         case 'competitive':
-          modeGuidance = `Competitive mode: Focus on evaluation shifts, calculation threats, tempo, and tactical continuations. Max 3 concise sentences and 40 words.`;
+          modeGuidance = 'Competitive mode: 1 crisp sentence (max 18 words) focusing on evaluation shift and initiative.';
           break;
       }
 
       const evalNotes = facts.isEvaluationAvailable
         ? `- Centipawn loss: ${facts.cpLoss} cp\n- Eval before: ${facts.evalBefore !== null ? (facts.evalBefore > 0 ? '+' : '') + facts.evalBefore + ' cp' : 'N/A'}\n- Eval after: ${facts.evalAfter !== null ? (facts.evalAfter > 0 ? '+' : '') + facts.evalAfter + ' cp' : 'N/A'}`
-        : `- Engine evaluation unavailable. Do NOT state fabricated scores. Describe move physical board effect truthfully.`;
+        : `- Engine evaluation unavailable. Do NOT fabricate scores.`;
 
-      const systemInstruction = `You are an expert live chess coach providing post-move commentary for an improving player.
+      const systemInstruction = `You are a live chess coach.
 Mode: ${mode}.
 Rules:
-1. Output PLAIN TEXT ONLY. Absolutely NO markdown, NO asterisks, NO bolding, NO bullet points.
-2. Max ${maxSentences} short sentences, max ${maxWords} words.
+1. PLAIN TEXT ONLY (no markdown, no asterisks, no bullets).
+2. Output 1 crisp spoken sentence, max 18 words (strict ceiling ${maxSentences} sentences, ${maxWords} words).
 3. ${moveNamingInstruction}
-4. Base your comment strictly on the provided Stockfish engine facts. Do not invent fake tactics or fabricated scores.`;
+4. Base strictly on Stockfish facts.`;
 
-      const userPrompt = `Engine Facts:
-- Move played: ${facts.moveSan} by ${mover}
-- Classification: ${facts.classification === 'unavailable' ? 'Evaluation unavailable' : facts.classification}
+      const userPrompt = `Facts:
+- Move: ${facts.moveSan} by ${mover} (${facts.classification === 'unavailable' ? 'Evaluation unavailable' : facts.classification})
 ${evalNotes}
-- Was best engine move: ${facts.isBestMove ? 'Yes' : 'No'}
-- Engine best move: ${facts.bestMoveSan || 'N/A'}
-- Opponent best reply: ${facts.opponentReplySan || 'N/A'}
-- Recommended next move after reply: ${facts.bestNextMoveSan || 'N/A'}
-- Move flags: ${facts.isCheck ? 'check, ' : ''}${facts.isCapture ? 'capture, ' : ''}${facts.isCastling ? 'castles, ' : ''}none
-- Recent moves: ${recentNotation}
-- FEN: ${facts.fen}
+- Best move: ${facts.bestMoveSan || 'N/A'} | Reply: ${facts.opponentReplySan || 'N/A'}
+- Recent: ${recentNotation}
 
-Task: ${modeGuidance}`;
+${modeGuidance}`;
 
       try {
         const rawResponse = await geminiService.generateLiveCommentary(
           userPrompt,
           systemInstruction,
-          maxSentences
+          1,
+          signal
         );
+
+        if (signal?.aborted) {
+          return null;
+        }
 
         const cleaned = this.cleanAndTruncateComment(rawResponse, mode);
         const finalComment = cleaned || this.getFallbackComment(facts, mode);
@@ -504,7 +508,8 @@ Task: ${modeGuidance}`;
     currentFen: string,
     move: { from: string; to: string; promotion?: string; san: string; piece?: string; captured?: string },
     moverColor: 'w' | 'b',
-    previousPhase?: 'opening' | 'middlegame' | 'endgame'
+    previousPhase?: 'opening' | 'middlegame' | 'endgame',
+    signal?: AbortSignal
   ): Promise<MoveFacts> {
     const playedUci = `${move.from}${move.to}${move.promotion || ''}`.toLowerCase();
 
@@ -520,9 +525,9 @@ Task: ${modeGuidance}`;
       mateBefore = precomputed.mate;
       bestMoveUci = precomputed.bestMoveUci;
       beforeEvalAvailable = true;
-    } else {
+    } else if (!signal?.aborted) {
       try {
-        const beforeRes = await engineService.evaluate(previousFen, 250);
+        const beforeRes = await engineService.evaluate(previousFen, 180);
         if (beforeRes.isAvailable) {
           evalBefore = beforeRes.score;
           mateBefore = beforeRes.mate;
@@ -534,22 +539,24 @@ Task: ${modeGuidance}`;
       }
     }
 
-    // 2. Evaluate position after the move & get opponent's best reply
+    // 2. Evaluate position after the move & get opponent's best reply (capped 180ms for low latency)
     let evalAfter: number | null = null;
     let mateAfter: number | null = null;
     let opponentReplyUci = '';
     let afterEvalAvailable = false;
-    try {
-      const afterRes = await engineService.evaluate(currentFen, 250);
-      if (afterRes.isAvailable) {
-        // In currentFen, it is opponent's turn. Negate score & mate to keep mover's perspective.
-        evalAfter = afterRes.score !== null ? -afterRes.score : null;
-        mateAfter = afterRes.mate !== null ? -afterRes.mate : null;
-        afterEvalAvailable = true;
+    if (!signal?.aborted) {
+      try {
+        const afterRes = await engineService.evaluate(currentFen, 180);
+        if (afterRes.isAvailable) {
+          // In currentFen, it is opponent's turn. Negate score & mate to keep mover's perspective.
+          evalAfter = afterRes.score !== null ? -afterRes.score : null;
+          mateAfter = afterRes.mate !== null ? -afterRes.mate : null;
+          afterEvalAvailable = true;
+        }
+        opponentReplyUci = afterRes.bestMove || '';
+      } catch (e) {
+        console.warn('Evaluation after move failed:', e);
       }
-      opponentReplyUci = afterRes.bestMove || '';
-    } catch (e) {
-      console.warn('Evaluation after move failed:', e);
     }
 
     // 3. Centipawn loss and eval swing
@@ -578,7 +585,7 @@ Task: ${modeGuidance}`;
     // 4. Was it the engine's best move? Validate best move with chess.js
     const isBestMove = !!(bestMoveUci && bestMoveUci.toLowerCase() === playedUci);
 
-    // 5. Compute best move SAN, opponent reply SAN, and best next move SAN
+    // 5. Compute best move SAN and opponent reply SAN synchronously with chess.js (no extra engine round-trip)
     let bestMoveSan: string | undefined;
     if (bestMoveUci && bestMoveUci.length >= 4) {
       try {
@@ -606,19 +613,6 @@ Task: ${modeGuidance}`;
         const oppPlayed = oppGame.move({ from: oppFrom, to: oppTo, promotion: oppPromo });
         if (oppPlayed) {
           opponentReplySan = oppPlayed.san;
-          // Calculate best next move for player after opponent replies
-          const nextFen = oppGame.fen();
-          const nextRes = await engineService.evaluate(nextFen, 180);
-          if (nextRes && nextRes.bestMove && nextRes.bestMove.length >= 4) {
-            const nextGame = new Chess(nextFen);
-            const nFrom = nextRes.bestMove.substring(0, 2);
-            const nTo = nextRes.bestMove.substring(2, 4);
-            const nPromo = nextRes.bestMove.length > 4 ? nextRes.bestMove[4] : undefined;
-            const nPlayed = nextGame.move({ from: nFrom, to: nTo, promotion: nPromo });
-            if (nPlayed) {
-              bestNextMoveSan = nPlayed.san;
-            }
-          }
         }
       } catch {
         // Fallback

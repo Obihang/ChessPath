@@ -57,6 +57,7 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
       "Hello! I am your chess coach. Let's find the best move together.",
       settings,
       {
+        allowLocalFallback: false,
         onStart: () => setIsTestingSpeech(true),
         onEnd: () => setIsTestingSpeech(false),
         onError: () => setIsTestingSpeech(false),
@@ -113,13 +114,13 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
 
   const isMuted = !settings.voiceEnabled;
   const isVolumeZero = settings.voiceVolume <= 0;
-  const activeEngine = settings.ttsEngine || 'gemini';
+  const activeEngine = settings.ttsEngine || 'browser';
   const activeVoiceLabel =
     activeEngine === 'gemini'
       ? settings.geminiVoice || 'Kore'
       : activeEngine === 'edge'
       ? settings.edgeVoice || 'en-US-AndrewNeural'
-      : 'Browser Default';
+      : 'Instant Local Voice';
 
   return (
     <div className="bg-slate-950/70 border border-slate-800 rounded-xl overflow-hidden text-xs">
@@ -163,10 +164,10 @@ export const SpeechDiagnosticPanel: React.FC<SpeechDiagnosticPanelProps> = ({
           <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/30 text-amber-300 font-medium">
             Engine:{' '}
             {activeEngine === 'gemini'
-              ? 'Gemini TTS'
+              ? 'HD Gemini TTS'
               : activeEngine === 'edge'
               ? 'Edge Neural Proxy'
-              : 'Standard Device TTS'}
+              : 'Instant Voice (Local)'}
           </span>
 
           <span

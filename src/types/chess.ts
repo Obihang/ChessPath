@@ -99,8 +99,6 @@ export interface AppSettings {
   coachVerbosity?: CoachVerbosity;
   coachPersonality?: CoachPersonality;
   revealBetterMoveNames: boolean;
-  autoSendTranscribed: boolean;
-  streamingVoice: boolean;
 }
 
 export type CoachMode = 'learning' | 'criticizing' | 'simple' | 'competitive';
