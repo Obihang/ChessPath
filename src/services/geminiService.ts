@@ -176,7 +176,11 @@ Keep the tone encouraging, constructive, and inspiring!`;
         parts: m.parts?.length ? m.parts : [{ text: (m as any).content || '' }],
       }));
 
-      const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+      const modelsToTry = [
+        GEMINI_MODELS.TEXT_PRIMARY,
+        GEMINI_MODELS.TEXT_FALLBACK,
+        GEMINI_MODELS.TEXT_LEGACY_FALLBACK,
+      ];
       let lastErr: unknown = null;
 
       for (const model of modelsToTry) {
@@ -403,7 +407,11 @@ Keep the tone encouraging, constructive, and inspiring!`;
     if (detected.provider === 'gemini') {
       try {
         const ai = new GoogleGenAI({ apiKey });
-        const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+        const modelsToTry = [
+          GEMINI_MODELS.TEXT_PRIMARY,
+          GEMINI_MODELS.TEXT_FALLBACK,
+          GEMINI_MODELS.TEXT_LEGACY_FALLBACK,
+        ];
         let lastErr: any = null;
 
         for (const model of modelsToTry) {

@@ -212,7 +212,11 @@ export async function streamSmartAI(
   const ai = new GoogleGenAI({ apiKey });
   let fullText = '';
 
-  const modelsToTry = [GEMINI_MODELS.TEXT_PRIMARY, GEMINI_MODELS.TEXT_FALLBACK];
+  const modelsToTry = [
+    GEMINI_MODELS.TEXT_PRIMARY,
+    GEMINI_MODELS.TEXT_FALLBACK,
+    GEMINI_MODELS.TEXT_LEGACY_FALLBACK,
+  ];
   let lastError: unknown = null;
 
   for (const model of modelsToTry) {
@@ -270,6 +274,7 @@ export async function callSmartAI(
     const modelsToTry = [
       detected.model || GEMINI_MODELS.TEXT_PRIMARY,
       GEMINI_MODELS.TEXT_FALLBACK,
+      GEMINI_MODELS.TEXT_LEGACY_FALLBACK,
     ];
     let lastErr: unknown = null;
 

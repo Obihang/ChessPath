@@ -11,7 +11,8 @@
     "lint": "tsc --noEmit",
     "validate": "tsx src/utils/validateContent.ts",
     "test:engine": "tsx scripts/testEngine.ts",
-    "test:coach": "tsx scripts/testCommentaryRegression.ts"
+    "test:coach": "tsx scripts/testCommentaryRegression.ts",
+    "test:regression": "tsx scripts/testCommentaryRegression.ts"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
