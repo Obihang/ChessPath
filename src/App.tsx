@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 import { ActiveTab, AppSettings } from './types/chess';
 import { UserProgress } from './types/curriculum';
 import { storageService } from './services/storageService';
@@ -6,12 +6,22 @@ import { soundService } from './services/audioService';
 import { TopBar } from './components/common/TopBar';
 import { BottomNav } from './components/common/BottomNav';
 import { PlayView } from './components/play/PlayView';
-import { LearnView } from './components/learn/LearnView';
-import { OpeningsView } from './components/openings/OpeningsView';
-import { PracticeView } from './components/practice/PracticeView';
-import { ProgressView } from './components/progress/ProgressView';
-import { SettingsModal } from './components/settings/SettingsModal';
 import { validateAllContent } from './utils/validateContent';
+
+// Lazy-loaded secondary views for faster initial startup
+const LearnView = lazy(() => import('./components/learn/LearnView').then(m => ({ default: m.LearnView })));
+const OpeningsView = lazy(() => import('./components/openings/OpeningsView').then(m => ({ default: m.OpeningsView })));
+const PracticeView = lazy(() => import('./components/practice/PracticeView').then(m => ({ default: m.PracticeView })));
+const ProgressView = lazy(() => import('./components/progress/ProgressView').then(m => ({ default: m.ProgressView })));
+const SettingsModal = lazy(() => import('./components/settings/SettingsModal').then(m => ({ default: m.SettingsModal })));
+
+function ViewLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-[50vh]">
+      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-amber-500"></div>
+    </div>
+  );
+}
 
 export default function App() {
   useEffect(() => {
@@ -161,57 +171,61 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'learn' && (
-          <LearnView
-            settings={settings}
-            coachPersonality={settings.coachPersonality}
-            coachVerbosity={settings.coachVerbosity}
-            completedLessonIds={progress.completedLessonIds}
-            passedQuizLevelIds={progress.passedQuizLevelIds}
-            onCompleteLesson={handleCompleteLesson}
-            onPassQuiz={handlePassQuiz}
-          />
-        )}
+        <Suspense fallback={<ViewLoadingFallback />}>
+          {activeTab === 'learn' && (
+            <LearnView
+              settings={settings}
+              coachPersonality={settings.coachPersonality}
+              coachVerbosity={settings.coachVerbosity}
+              completedLessonIds={progress.completedLessonIds}
+              passedQuizLevelIds={progress.passedQuizLevelIds}
+              onCompleteLesson={handleCompleteLesson}
+              onPassQuiz={handlePassQuiz}
+            />
+          )}
 
-        {activeTab === 'openings' && (
-          <OpeningsView
-            settings={settings}
-            onCompletePractice={handleCompleteOpeningPractice}
-          />
-        )}
+          {activeTab === 'openings' && (
+            <OpeningsView
+              settings={settings}
+              onCompletePractice={handleCompleteOpeningPractice}
+            />
+          )}
 
-        {activeTab === 'practice' && (
-          <PracticeView
-            settings={settings}
-            coachPersonality={settings.coachPersonality}
-            coachVerbosity={settings.coachVerbosity}
-            userRating={progress.puzzleRating}
-            solvedPuzzleIds={[]}
-            onSolvePuzzle={handleSolvePuzzle}
-            onFailPuzzle={handleFailPuzzle}
-          />
-        )}
+          {activeTab === 'practice' && (
+            <PracticeView
+              settings={settings}
+              coachPersonality={settings.coachPersonality}
+              coachVerbosity={settings.coachVerbosity}
+              userRating={progress.puzzleRating}
+              solvedPuzzleIds={[]}
+              onSolvePuzzle={handleSolvePuzzle}
+              onFailPuzzle={handleFailPuzzle}
+            />
+          )}
 
-        {activeTab === 'progress' && (
-          <ProgressView
-            progress={progress}
-            settings={settings}
-            onNavigateToTab={(tab) => setActiveTab(tab)}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-          />
-        )}
+          {activeTab === 'progress' && (
+            <ProgressView
+              progress={progress}
+              settings={settings}
+              onNavigateToTab={(tab) => setActiveTab(tab)}
+              onOpenSettings={() => setIsSettingsOpen(true)}
+            />
+          )}
+
+          {/* Global Settings Modal */}
+          {isSettingsOpen && (
+            <SettingsModal
+              isOpen={isSettingsOpen}
+              onClose={() => setIsSettingsOpen(false)}
+              settings={settings}
+              onUpdateSettings={handleUpdateSettings}
+            />
+          )}
+        </Suspense>
       </main>
 
       {/* Bottom 5-Tab Navigation Bar */}
       <BottomNav activeTab={activeTab} onChangeTab={setActiveTab} />
-
-      {/* Global Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        settings={settings}
-        onUpdateSettings={handleUpdateSettings}
-      />
     </div>
   );
 }

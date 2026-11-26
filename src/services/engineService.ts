@@ -178,7 +178,8 @@ class StockfishUciController {
     try {
       let requireFn = typeof require !== 'undefined' ? require : (globalThis as any).require;
       if (!requireFn) {
-        const { createRequire } = await import('node:module');
+        const modName = 'node:module';
+        const { createRequire } = await import(/* @vite-ignore */ modName);
         requireFn = createRequire(process.cwd() + '/package.json');
       }
       const initStockfish = requireFn('stockfish');
