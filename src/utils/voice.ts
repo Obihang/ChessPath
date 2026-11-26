@@ -502,7 +502,7 @@ export async function speak(
   const mySpeechId = currentSpeechId;
 
   const edgeVoice = options.edgeVoice || settings.edgeVoice || DEFAULT_EDGE_VOICE;
-  const rate = Math.max(0.5, Math.min(2.0, options.rate ?? settings.voiceRate ?? 1.0));
+  const rate = Math.max(0.5, Math.min(2.0, options.rate ?? settings.voiceRate ?? 0.92));
   const volume = Math.max(0, Math.min(1.0, options.volume ?? settings.voiceVolume ?? 1.0));
 
   const fetchRes = await fetchEdgeTtsAudio(cleanText, edgeVoice, rate, options.signal);

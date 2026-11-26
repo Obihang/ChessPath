@@ -436,9 +436,9 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                   {legalMove && (
                     <div className="absolute inset-0 z-20 flex items-center justify-center pointer-events-none">
                       {isCapture ? (
-                        <div className="w-[84%] h-[84%] rounded-full border-4 sm:border-[5px] border-black/25 dark:border-white/35" />
+                        <div className="w-[84%] h-[84%] rounded-full border-4 sm:border-[5px] border-sky-500/75 shadow-xs" />
                       ) : (
-                        <div className="w-3 sm:w-3.5 h-3 sm:h-3.5 rounded-full bg-black/22 dark:bg-white/30 shadow-xs" />
+                        <div className="w-3.5 sm:w-4 h-3.5 sm:h-4 rounded-full bg-sky-500/65 ring-1 ring-sky-950/25 shadow-xs" />
                       )}
                     </div>
                   )}

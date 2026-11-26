@@ -48,7 +48,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiBaseUrl: '',
   aiModelName: '',
   voiceEnabled: true,
-  voiceRate: 1.0,
+  voiceRate: 0.92,
   voiceVolume: 1.0,
   ttsEngine: 'edge',
   edgeVoice: DEFAULT_EDGE_VOICE,
