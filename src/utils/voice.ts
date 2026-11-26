@@ -7,6 +7,7 @@ import {
 } from '../constants/aiModels';
 import { storageService } from '../services/storageService';
 import { soundService } from '../services/audioService';
+import { audioCacheService } from '../services/audioCacheService';
 
 export { DEFAULT_EDGE_TTS_URL, DEFAULT_EDGE_VOICE, EDGE_NEURAL_VOICES };
 export type { EdgeVoiceOption, VoiceOption };
@@ -156,6 +157,18 @@ async function fetchEdgeTtsAudio(
     return { entry: cached };
   }
 
+  // Check persistent IndexedDB cache before network call
+  try {
+    const idbBuffer = await audioCacheService.getClip(cleanText, edgeVoice);
+    if (idbBuffer && hasValidAudioHeader(idbBuffer)) {
+      const entry: CachedAudioEntry = { buffer: idbBuffer, mimeType: 'audio/mpeg' };
+      setLruEntry(cacheKey, entry);
+      return { entry };
+    }
+  } catch {
+    // Proceed to network fetch on cache read error
+  }
+
   const controller = new AbortController();
   let timedOut = false;
   const timeoutId = setTimeout(() => {
@@ -197,6 +210,7 @@ async function fetchEdgeTtsAudio(
     const mimeType = headerType.includes('audio') ? headerType : 'audio/mpeg';
     const entry: CachedAudioEntry = { buffer: arrayBuf, mimeType };
     setLruEntry(cacheKey, entry);
+    audioCacheService.saveClip(cleanText, edgeVoice, arrayBuf).catch(() => {});
     return { entry };
   } catch (err: any) {
     if (externalSignal?.aborted && !timedOut) {
@@ -346,6 +360,102 @@ export function stopSpeech(): void {
   currentSpeechId++;
   soundService.stopActiveSpeech(40);
   cleanupActiveAudioElement();
+  if (typeof window !== 'undefined' && window.speechSynthesis) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
+ * Speaks a phrase using the device browser's built-in Web Speech API (speechSynthesis).
+ * Used automatically as a fallback when offline or when Edge Neural TTS is unreachable.
+ */
+function speakWithWebSpeech(
+  cleanText: string,
+  rate: number,
+  volume: number,
+  mySpeechId: number,
+  options: SpeakOptions = {}
+): Promise<SpeakResult> {
+  if (typeof window === 'undefined' || !window.speechSynthesis) {
+    return Promise.resolve({
+      success: false,
+      usedNatural: false,
+      error: 'Device speech synthesis is unavailable on this device.',
+    });
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.rate = rate;
+    utterance.volume = volume;
+    utterance.lang = 'en-US';
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore
+      }
+      options.signal?.removeEventListener('abort', onAbort);
+      resolve({ success: false, usedNatural: false, aborted: true });
+    };
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        resolve({ success: false, usedNatural: false, aborted: true });
+        return;
+      }
+      options.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    utterance.onstart = () => {
+      if (mySpeechId !== currentSpeechId || options.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      options.onStart?.();
+    };
+
+    utterance.onend = () => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener('abort', onAbort);
+      options.onEnd?.();
+      resolve({ success: true, usedNatural: false });
+    };
+
+    utterance.onerror = (e) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener('abort', onAbort);
+      resolve({
+        success: false,
+        usedNatural: false,
+        error: e.error || 'Device speech synthesis error',
+      });
+    };
+
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch (err: any) {
+      if (!settled) {
+        settled = true;
+        options.signal?.removeEventListener('abort', onAbort);
+        resolve({
+          success: false,
+          usedNatural: false,
+          error: err?.message || 'Failed to start device speech synthesis',
+        });
+      }
+    }
+  });
 }
 
 export interface SpeakOptions {
@@ -367,7 +477,7 @@ export interface SpeakResult {
 
 /**
  * Speaks a chess coaching phrase using MS Edge Neural TTS (https://chesspath-tts.vercel.app/tts)
- * with in-memory LRU caching and AbortController cancellation.
+ * with IndexedDB + LRU caching and automatic offline Web Speech API fallback.
  */
 export async function speak(
   text: string,
@@ -401,9 +511,8 @@ export async function speak(
   }
 
   if (!fetchRes.entry) {
-    const errMsg = fetchRes.error || 'Unable to synthesize Edge Neural TTS audio.';
-    options.onError?.(new Error(errMsg));
-    return { success: false, usedNatural: false, error: errMsg };
+    // Edge Neural TTS unavailable or device offline: fallback to device browser speech
+    return await speakWithWebSpeech(cleanText, rate, volume, mySpeechId, options);
   }
 
   const playRes = await playAudioBuffer(fetchRes.entry, volume, rate, mySpeechId, options);
@@ -412,9 +521,8 @@ export async function speak(
   }
 
   if (!playRes.played) {
-    const errMsg = playRes.error || 'Audio playback failed on this device.';
-    options.onError?.(new Error(errMsg));
-    return { success: false, usedNatural: false, error: errMsg };
+    // Audio playback error: fallback to device browser speech
+    return await speakWithWebSpeech(cleanText, rate, volume, mySpeechId, options);
   }
 
   return { success: true, usedNatural: true };
