@@ -258,7 +258,9 @@ export function useLiveCoach({ settings, playerColor, onCommentaryGenerated }: U
         let usedSource: 'gemini' | 'template' = 'template';
 
         const detectedProvider = detectApiKeyProvider(settings.aiApiKey || settings.geminiApiKey);
+        const commentaryEngine = settings.commentaryEngine || 'ai';
         const warrantsAiCall =
+          commentaryEngine === 'ai' &&
           detectedProvider.provider !== 'none' &&
           isPlayerMove &&
           (verbosity === 'detailed' || verbosity === 'verbose' || isCriticalOrTactical);

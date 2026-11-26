@@ -4,6 +4,7 @@ import {
   BoardThemeId,
   CoachPersonality,
   CoachVerbosity,
+  CommentaryEngine,
 } from '../../types/chess';
 import { speechService } from '../../services/speechService';
 import { soundService } from '../../services/audioService';
@@ -418,6 +419,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <option value="aggressive">Tactical Attacker — Initiative & threats</option>
                     <option value="professor">Positional Professor — Strategic plans</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Commentary Engine Toggle: Instant Stockfish vs AI Phrasing */}
+              <div className="space-y-1.5">
+                <label className="text-slate-300 font-semibold flex items-center justify-between">
+                  <span>Commentary Speed &amp; Source</span>
+                  <span className="text-[10px] font-normal text-slate-400">
+                    {(localSettings.commentaryEngine || 'ai') === 'instant'
+                      ? 'Instant (~200 ms, 0 AI quota)'
+                      : 'AI Phrasing (~1.5s, uses API key)'}
+                  </span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleChange('commentaryEngine', 'instant' as CommentaryEngine)}
+                    className={`px-3 py-2 rounded-lg border text-left transition-all ${
+                      (localSettings.commentaryEngine || 'ai') === 'instant'
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-semibold'
+                        : 'bg-slate-800/70 border-slate-700 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="text-xs">⚡ Instant (Stockfish)</div>
+                    <div className="text-[10px] opacity-80 font-normal">Fastest voice, 100% offline</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChange('commentaryEngine', 'ai' as CommentaryEngine)}
+                    className={`px-3 py-2 rounded-lg border text-left transition-all ${
+                      (localSettings.commentaryEngine || 'ai') === 'ai'
+                        ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-semibold'
+                        : 'bg-slate-800/70 border-slate-700 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="text-xs">✨ AI Coach (Gemini)</div>
+                    <div className="text-[10px] opacity-80 font-normal">Creative natural phrasing</div>
+                  </button>
                 </div>
               </div>
 

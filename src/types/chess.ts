@@ -72,6 +72,7 @@ export type AIProviderId = 'auto' | 'gemini' | 'groq' | 'openrouter' | 'openai' 
 export type TTSEngineType = 'edge';
 export type CoachVerbosity = 'silent' | 'brief' | 'detailed' | 'verbose';
 export type CoachPersonality = 'supportive' | 'strict' | 'aggressive' | 'professor';
+export type CommentaryEngine = 'ai' | 'instant';
 
 export interface AppSettings {
   boardTheme: BoardThemeId;
@@ -95,6 +96,7 @@ export interface AppSettings {
   coachMode: CoachMode;
   coachVerbosity?: CoachVerbosity;
   coachPersonality?: CoachPersonality;
+  commentaryEngine?: CommentaryEngine;
   revealBetterMoveNames: boolean;
 }
 

@@ -58,6 +58,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   coachMode: 'learning',
   coachVerbosity: 'detailed',
   coachPersonality: 'strict',
+  commentaryEngine: 'ai',
   revealBetterMoveNames: true,
 };
 
