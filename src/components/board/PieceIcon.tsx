@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PieceColor, PieceType } from '../../types/chess';
 import { getPieceSvgUrl, DEFAULT_PIECE_SET } from '../../config/pieceSets';
 import { storageService } from '../../services/storageService';
@@ -18,12 +18,17 @@ export const PieceIcon: React.FC<PieceIconProps> = ({
   pieceSet: propPieceSet,
   pieceShadow: propPieceShadow,
 }) => {
-  const settings = storageService.getSettings();
-  const currentSet = propPieceSet || settings.pieceSet || DEFAULT_PIECE_SET;
-  const hasShadow = propPieceShadow !== undefined ? propPieceShadow : (settings.pieceShadow ?? true);
+  const settings = propPieceSet !== undefined && propPieceShadow !== undefined ? null : storageService.getSettings();
+  const currentSet = propPieceSet || settings?.pieceSet || DEFAULT_PIECE_SET;
+  const hasShadow = propPieceShadow !== undefined ? propPieceShadow : (settings?.pieceShadow ?? true);
 
   const [activeSet, setActiveSet] = useState<string>(currentSet);
   const [hasError, setHasError] = useState<boolean>(false);
+
+  useEffect(() => {
+    setActiveSet(currentSet);
+    setHasError(false);
+  }, [currentSet]);
 
   const imgUrl = getPieceSvgUrl(activeSet, color, type);
   const fallbackUrl = getPieceSvgUrl(DEFAULT_PIECE_SET, color, type);
