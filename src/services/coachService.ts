@@ -40,13 +40,13 @@ export interface HeuristicCommentary {
 
 const PERSONA_PROMPTS: Record<CoachPersonality, string> = {
   strict:
-    'You are a Strict Grandmaster: direct, sharp, and demanding of precision. Do not sugarcoat mistakes; point out the concrete flaw immediately and challenge the player to find stronger continuations.',
+    'You are a blunt, unforgiving Soviet-style Grandmaster. Never sugarcoat mistakes. Call out blunders sharply (e.g., "Unacceptable.", "Sloppy.", "Stop rushing.") and demand concrete calculation.',
   supportive:
-    'You are a Supportive Mentor: warm, encouraging, and constructive. Frame mistakes as learning opportunities and gently guide the student toward the stronger idea.',
+    'You are a warm, upbeat, encouraging Chess Mentor. Celebrate good ideas enthusiastically, reassure the player on mistakes (e.g., "No worries!", "Good try!"), and guide gently with positive energy.',
   aggressive:
-    'You are a Tactical Attacker: energetic and focused on initiative, king hunt, sacrifices, tempo, and punishing passive play.',
+    'You are a fearless, high-energy Tactical Attacker like Mikhail Tal. Get hyped about sacrifices, open files, tempo, and king hunts! Mock passive moves and urge bold attacking play.',
   professor:
-    'You are a Positional Professor: analytical and focused on pawn structure, outposts, piece coordination, king safety, and long-term strategic plans.',
+    'You are a calm, scholarly Positional Professor. Speak thoughtfully about pawn structure, outposts, bishop pairs, and long-term strategic harmony using precise analytical phrasing.',
 };
 
 /**
@@ -687,91 +687,115 @@ export function buildFallbackMoveComment(
     tacticalReasons[0] || 'maintains piece coordination and central control';
 
   const showExactBestMove = verbosity === 'verbose' && bestMoveSan && bestMoveSan !== moveSan;
-  const suggestionText = showExactBestMove
-    ? `You should have played ${bestMoveSan} instead.`
-    : bestMoveSan && bestMoveSan !== moveSan
-    ? bestMoveSan.includes('x')
-      ? 'Look for the active capture that wins material or relieves pressure.'
-      : bestMoveSan.includes('+')
-      ? 'Look for a forcing check that seizes the initiative.'
-      : 'Focus on active piece development and central control.'
-    : 'Keep your pieces coordinated and defended.';
+  const suggestionText = (() => {
+    if (showExactBestMove) {
+      switch (activePersonality) {
+        case 'strict':
+          return `Play ${bestMoveSan}—no excuses.`;
+        case 'supportive':
+          return `Next time, try ${bestMoveSan} to keep things super solid!`;
+        case 'aggressive':
+          return `Strike with ${bestMoveSan} instead and seize the attack!`;
+        case 'professor':
+          return `The principled continuation was ${bestMoveSan}.`;
+      }
+    }
+    if (bestMoveSan && bestMoveSan !== moveSan) {
+      switch (activePersonality) {
+        case 'strict':
+          return bestMoveSan.includes('x')
+            ? 'Calculate captures first—you missed winning material.'
+            : 'Stop drifting and fight for the center.';
+        case 'supportive':
+          return bestMoveSan.includes('x')
+            ? 'Look closely for free captures next time—you got this!'
+            : 'Keep developing your pieces toward the center!';
+        case 'aggressive':
+          return bestMoveSan.includes('+')
+            ? 'Look for forcing checks to keep them on the ropes!'
+            : 'Push forward and create threats—never play passively!';
+        case 'professor':
+          return 'Focus on long-term piece harmony and square control.';
+      }
+    }
+    return 'Keep your pieces coordinated and defended.';
+  })();
 
   let text = '';
 
   if (classification === 'blunder') {
     switch (activePersonality) {
       case 'strict':
-        text = `Serious blunder with ${moveSan}! You dropped ${dropPawns.toFixed(1)} pawns of evaluation. ${suggestionText}`;
+        text = `Unacceptable blunder with ${moveSan}! You just threw away ${dropPawns.toFixed(1)} pawns. ${suggestionText}`;
         break;
       case 'supportive':
-        text = `Careful—${moveSan} is a blunder that leaves a tactical opening. ${suggestionText}`;
+        text = `Oh, careful! ${moveSan} is a tough slip, giving up ${dropPawns.toFixed(1)} pawns—no worries, every game teaches us. ${suggestionText}`;
         break;
       case 'aggressive':
-        text = `${moveSan} hands the attack straight to your opponent! ${suggestionText}`;
+        text = `Disaster! ${moveSan} hands the entire attack straight to your opponent! ${suggestionText}`;
         break;
       case 'professor':
-        text = `${moveSan} is a critical oversight costing ${dropPawns.toFixed(1)} pawns in evaluation. ${suggestionText}`;
+        text = `A critical structural oversight: ${moveSan} concedes ${dropPawns.toFixed(1)} pawns of evaluation. ${suggestionText}`;
         break;
     }
   } else if (classification === 'mistake') {
     switch (activePersonality) {
       case 'strict':
-        text = `Mistake with ${moveSan}. That concedes key squares and costs valuable tempo. ${suggestionText}`;
+        text = `Sloppy mistake with ${moveSan}. You are conceding key squares for nothing. ${suggestionText}`;
         break;
       case 'supportive':
-        text = `${moveSan} is a mistake here—there was a stronger way to coordinate your pieces. ${suggestionText}`;
+        text = `${moveSan} is a small stumble, but don't sweat it—there was a cleaner way to coordinate. ${suggestionText}`;
         break;
       case 'aggressive':
-        text = `${moveSan} is too passive and lets your opponent seize the initiative! ${suggestionText}`;
+        text = `Too passive! ${moveSan} lets your opponent off the hook when you should be attacking! ${suggestionText}`;
         break;
       case 'professor':
-        text = `${moveSan} weakens your position and drops ${dropPawns.toFixed(1)} pawns. ${suggestionText}`;
+        text = `Strategically, ${moveSan} compromises your coordination and drops ${dropPawns.toFixed(1)} pawns. ${suggestionText}`;
         break;
     }
   } else if (classification === 'inaccuracy') {
     switch (activePersonality) {
       case 'strict':
-        text = `Inaccurate play with ${moveSan}. Look for a sharper continuation. ${suggestionText}`;
+        text = `Imprecise play with ${moveSan}. Demand more accuracy from yourself. ${suggestionText}`;
         break;
       case 'supportive':
-        text = `${moveSan} is playable, though a slightly more accurate plan was available. ${suggestionText}`;
+        text = `Nice try with ${moveSan}—it's playable, though there's an even sharper option! ${suggestionText}`;
         break;
       case 'aggressive':
-        text = `${moveSan} misses a chance to put maximum pressure on your opponent. ${suggestionText}`;
+        text = `${moveSan} is too tame—crank up the pressure on their king! ${suggestionText}`;
         break;
       case 'professor':
-        text = `${moveSan} is a minor inaccuracy that concedes a small positional edge. ${suggestionText}`;
+        text = `${moveSan} is a subtle inaccuracy that slightly eases the tension. ${suggestionText}`;
         break;
     }
   } else if (classification === 'best' || classification === 'great' || classification === 'brilliant') {
     switch (activePersonality) {
       case 'strict':
-        text = `Accurate move with ${moveSan}. That matches the engine's top choice and ${primaryReason}.`;
+        text = `Crisp, clinical ${moveSan}. That's the engine's top choice and ${primaryReason}.`;
         break;
       case 'supportive':
-        text = `Excellent find! ${moveSan} is the strongest move on the board and ${primaryReason}.`;
+        text = `Awesome find! ${moveSan} is the strongest move on the board and ${primaryReason}!`;
         break;
       case 'aggressive':
-        text = `Powerful play! ${moveSan} keeps maximum pressure on the board and ${primaryReason}.`;
+        text = `Boom! Crushing play with ${moveSan}—keep hunting! It ${primaryReason}.`;
         break;
       case 'professor':
-        text = `Principled execution with ${moveSan}, which ${primaryReason} and maintains optimal harmony.`;
+        text = `Textbook execution with ${moveSan}; it ${primaryReason} and maximizes harmony.`;
         break;
     }
   } else {
     switch (activePersonality) {
       case 'strict':
-        text = `Solid move ${moveSan}, which ${primaryReason}. Keep calculating forcing replies.`;
+        text = `Acceptable move ${moveSan}, which ${primaryReason}. Stay alert for tactics.`;
         break;
       case 'supportive':
-        text = `Good move! ${moveSan} ${primaryReason} and keeps your position healthy.`;
+        text = `Great job! ${moveSan} ${primaryReason} and keeps your position super healthy.`;
         break;
       case 'aggressive':
-        text = `Good move ${moveSan}—now look to build attacking momentum on the next turn.`;
+        text = `Solid setup with ${moveSan}—now look to launch an attack on the next turn!`;
         break;
       case 'professor':
-        text = `Sound positional choice with ${moveSan}, as it ${primaryReason}.`;
+        text = `A sound, principled choice with ${moveSan}, as it ${primaryReason}.`;
         break;
     }
   }
